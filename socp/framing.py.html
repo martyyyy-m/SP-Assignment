@@ -1,0 +1,55 @@
+<html>
+<head>
+<title>framing.py</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #cf8e6d;}
+.s1 { color: #bcbec4;}
+.s2 { color: #bcbec4;}
+.s3 { color: #7a7e85;}
+.s4 { color: #c77dbb; font-style: italic;}
+.s5 { color: #2aacb8; font-style: italic;}
+.s6 { color: #6aab73;}
+.s7 { color: #56a8f5;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+framing.py</font>
+</center></td></tr></table>
+<pre><span class="s0">import </span><span class="s1">asyncio 
+</span><span class="s0">import </span><span class="s1">json 
+</span><span class="s0">import </span><span class="s1">struct 
+</span><span class="s0">from </span><span class="s1">typing </span><span class="s0">import </span><span class="s1">Any</span><span class="s2">, </span><span class="s1">Dict</span><span class="s2">, </span><span class="s1">Optional 
+</span>
+<span class="s2"># </span><span class="s3">Length-prefixed JSON framing (simple &amp; interop-friendly).</span>
+<span class="s4">MAX_FRAME_SIZE </span><span class="s2">= </span><span class="s5">4 </span><span class="s2">* </span><span class="s5">1024 </span><span class="s2">* </span><span class="s5">1024  </span><span class="s2"># </span><span class="s3">4 MiB</span>
+<span class="s4">LENGTH_STRUCT </span><span class="s2">= </span><span class="s1">struct</span><span class="s2">.</span><span class="s1">Struct</span><span class="s2">(&quot;</span><span class="s6">&lt;I</span><span class="s2">&quot;)</span>
+
+<span class="s0">async def </span><span class="s7">read_exactly</span><span class="s2">(reader: </span><span class="s1">asyncio</span><span class="s2">.</span><span class="s1">StreamReader</span><span class="s2">, n: int) -&gt; bytes:</span>
+    <span class="s0">return await </span><span class="s1">reader</span><span class="s2">.</span><span class="s1">readexactly</span><span class="s2">(</span><span class="s1">n</span><span class="s2">)</span>
+
+<span class="s0">async def </span><span class="s7">read_frame</span><span class="s2">(reader: </span><span class="s1">asyncio</span><span class="s2">.</span><span class="s1">StreamReader</span><span class="s2">) -&gt; </span><span class="s1">Optional</span><span class="s2">[</span><span class="s1">Dict</span><span class="s2">[str, </span><span class="s1">Any</span><span class="s2">]]:</span>
+    <span class="s1">len_bytes </span><span class="s2">= </span><span class="s0">await </span><span class="s1">reader</span><span class="s2">.</span><span class="s1">readexactly</span><span class="s2">(</span><span class="s5">4</span><span class="s2">)</span>
+    <span class="s2">(</span><span class="s1">length</span><span class="s2">,) = </span><span class="s4">LENGTH_STRUCT</span><span class="s2">.</span><span class="s1">unpack</span><span class="s2">(</span><span class="s1">len_bytes</span><span class="s2">)</span>
+    <span class="s0">if </span><span class="s1">length </span><span class="s2">&gt; </span><span class="s4">MAX_FRAME_SIZE</span><span class="s2">:</span>
+        <span class="s0">raise </span><span class="s2">ValueError(</span><span class="s0">f</span><span class="s6">&quot;Frame too large: </span><span class="s4">{</span><span class="s1">length</span><span class="s4">} </span><span class="s6">&gt; </span><span class="s4">{MAX_FRAME_SIZE}</span><span class="s6">&quot;</span><span class="s2">)</span>
+    <span class="s1">payload </span><span class="s2">= </span><span class="s0">await </span><span class="s1">read_exactly</span><span class="s2">(</span><span class="s1">reader</span><span class="s2">, </span><span class="s1">length</span><span class="s2">)</span>
+    <span class="s0">try</span><span class="s2">:</span>
+        <span class="s0">return </span><span class="s1">json</span><span class="s2">.</span><span class="s1">loads</span><span class="s2">(</span><span class="s1">payload</span><span class="s2">.</span><span class="s1">decode</span><span class="s2">(&quot;</span><span class="s6">utf-8</span><span class="s2">&quot;))</span>
+    <span class="s0">except </span><span class="s1">json</span><span class="s2">.</span><span class="s1">JSONDecodeError </span><span class="s0">as </span><span class="s1">exc</span><span class="s2">:</span>
+        <span class="s0">raise </span><span class="s2">ValueError(</span><span class="s0">f</span><span class="s6">&quot;Invalid JSON frame: </span><span class="s4">{</span><span class="s1">exc</span><span class="s4">}</span><span class="s6">&quot;</span><span class="s2">)</span>
+
+<span class="s0">async def </span><span class="s7">write_frame</span><span class="s2">(writer: </span><span class="s1">asyncio</span><span class="s2">.</span><span class="s1">StreamWriter</span><span class="s2">, obj: </span><span class="s1">Dict</span><span class="s2">[str, </span><span class="s1">Any</span><span class="s2">]) -&gt; </span><span class="s4">None</span><span class="s2">:</span>
+    <span class="s1">payload </span><span class="s2">= </span><span class="s1">json</span><span class="s2">.</span><span class="s1">dumps</span><span class="s2">(</span><span class="s1">obj</span><span class="s2">, separators=(&quot;</span><span class="s6">,</span><span class="s2">&quot;, &quot;</span><span class="s6">:</span><span class="s2">&quot;), ensure_ascii=</span><span class="s4">False</span><span class="s2">).</span><span class="s1">encode</span><span class="s2">(&quot;</span><span class="s6">utf-8</span><span class="s2">&quot;)</span>
+    <span class="s0">if </span><span class="s2">len(</span><span class="s1">payload</span><span class="s2">) &gt; </span><span class="s4">MAX_FRAME_SIZE</span><span class="s2">:</span>
+        <span class="s0">raise </span><span class="s2">ValueError(&quot;</span><span class="s6">Frame exceeds maximum size</span><span class="s2">&quot;)</span>
+    <span class="s1">writer</span><span class="s2">.</span><span class="s1">write</span><span class="s2">(</span><span class="s4">LENGTH_STRUCT</span><span class="s2">.</span><span class="s1">pack</span><span class="s2">(len(</span><span class="s1">payload</span><span class="s2">)))</span>
+    <span class="s1">writer</span><span class="s2">.</span><span class="s1">write</span><span class="s2">(</span><span class="s1">payload</span><span class="s2">)</span>
+    <span class="s0">await </span><span class="s1">writer</span><span class="s2">.</span><span class="s1">drain</span><span class="s2">()</span>
+
+</pre>
+</body>
+</html>

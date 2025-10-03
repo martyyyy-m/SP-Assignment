@@ -1,0 +1,281 @@
+<html>
+<head>
+<title>node.py</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #cf8e6d;}
+.s1 { color: #bcbec4;}
+.s2 { color: #bcbec4;}
+.s3 { color: #c77dbb; font-style: italic;}
+.s4 { color: #2aacb8; font-style: italic;}
+.s5 { color: #7a7e85;}
+.s6 { color: #56a8f5;}
+.s7 { color: #6aab73;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+node.py</font>
+</center></td></tr></table>
+<pre><span class="s0">import </span><span class="s1">asyncio 
+</span><span class="s0">import </span><span class="s1">os 
+</span><span class="s0">from </span><span class="s1">pathlib </span><span class="s0">import </span><span class="s1">Path 
+</span><span class="s0">from </span><span class="s1">typing </span><span class="s0">import </span><span class="s1">Dict</span><span class="s2">, </span><span class="s1">Optional</span><span class="s2">, </span><span class="s1">Tuple</span><span class="s2">, </span><span class="s1">Any 
+</span>
+<span class="s0">from </span><span class="s2">.</span><span class="s1">framing </span><span class="s0">import </span><span class="s1">read_frame</span><span class="s2">, </span><span class="s1">write_frame 
+</span><span class="s0">from </span><span class="s2">. </span><span class="s0">import </span><span class="s1">messages </span><span class="s0">as </span><span class="s1">m 
+</span>
+<span class="s3">SAFE_MAX_TTL </span><span class="s2">= </span><span class="s4">16  </span><span class="s2"># </span><span class="s5">upper bound to prevent message storms</span>
+
+<span class="s0">class </span><span class="s2">ConnectionContext:</span>
+    <span class="s0">def </span><span class="s2">__init__(self, reader: </span><span class="s1">asyncio</span><span class="s2">.</span><span class="s1">StreamReader</span><span class="s2">, writer: </span><span class="s1">asyncio</span><span class="s2">.</span><span class="s1">StreamWriter</span><span class="s2">) -&gt; </span><span class="s3">None</span><span class="s2">:</span>
+        <span class="s2">self.</span><span class="s1">reader </span><span class="s2">= </span><span class="s1">reader 
+        </span><span class="s2">self.</span><span class="s1">writer </span><span class="s2">= </span><span class="s1">writer 
+        </span><span class="s2">self.</span><span class="s1">peer_id</span><span class="s2">: </span><span class="s1">Optional</span><span class="s2">[str] = </span><span class="s3">None</span>
+
+<span class="s0">class </span><span class="s2">PresenceDirectory:</span>
+    <span class="s0">def </span><span class="s2">__init__(self) -&gt; </span><span class="s3">None</span><span class="s2">:</span>
+        <span class="s2">self.</span><span class="s1">_members</span><span class="s2">: </span><span class="s1">Dict</span><span class="s2">[str, </span><span class="s1">Dict</span><span class="s2">[str, </span><span class="s1">Any</span><span class="s2">]] = {}</span>
+
+    <span class="s0">def </span><span class="s6">update</span><span class="s2">(self, user_id: str, info: </span><span class="s1">Dict</span><span class="s2">[str, </span><span class="s1">Any</span><span class="s2">]) -&gt; </span><span class="s3">None</span><span class="s2">:</span>
+        <span class="s2">self.</span><span class="s1">_members</span><span class="s2">[</span><span class="s1">user_id</span><span class="s2">] = </span><span class="s1">info 
+</span>
+    <span class="s0">def </span><span class="s6">list_members</span><span class="s2">(self) -&gt; </span><span class="s1">Dict</span><span class="s2">[str, </span><span class="s1">Dict</span><span class="s2">[str, </span><span class="s1">Any</span><span class="s2">]]:</span>
+        <span class="s0">return </span><span class="s2">dict(self.</span><span class="s1">_members</span><span class="s2">)</span>
+
+<span class="s0">class </span><span class="s2">IntroducerServer:</span>
+    <span class="s2">&quot;&quot;&quot;</span>
+    <span class="s7">Introducer/broadcast relay (no storage of chat history). 
+    Hardened vs. vulnerable build: 
+      - All frames must verify() successfully. 
+      - Full replay protection for ALL message types. 
+      - No admin/backdoor code paths. 
+    </span><span class="s2">&quot;&quot;&quot;</span>
+    <span class="s0">def </span><span class="s2">__init__(self, host: str, port: int) -&gt; </span><span class="s3">None</span><span class="s2">:</span>
+        <span class="s2">self.</span><span class="s1">host </span><span class="s2">= </span><span class="s1">host 
+        </span><span class="s2">self.</span><span class="s1">port </span><span class="s2">= </span><span class="s1">port 
+        </span><span class="s2">self.</span><span class="s1">presence </span><span class="s2">= </span><span class="s1">PresenceDirectory</span><span class="s2">()</span>
+        <span class="s2">self.</span><span class="s1">conn_to_ctx</span><span class="s2">: </span><span class="s1">Dict</span><span class="s2">[</span><span class="s1">asyncio</span><span class="s2">.</span><span class="s1">StreamWriter</span><span class="s2">, </span><span class="s1">ConnectionContext</span><span class="s2">] = {}</span>
+        <span class="s2">self.</span><span class="s1">msg_cache</span><span class="s2">: </span><span class="s1">set</span><span class="s2">[str] = set()</span>
+        <span class="s2">self.</span><span class="s1">nonce_cache</span><span class="s2">: </span><span class="s1">set</span><span class="s2">[str] = set()</span>
+
+    <span class="s0">async def </span><span class="s6">start</span><span class="s2">(self) -&gt; </span><span class="s3">None</span><span class="s2">:</span>
+        <span class="s1">server </span><span class="s2">= </span><span class="s0">await </span><span class="s1">asyncio</span><span class="s2">.</span><span class="s1">start_server</span><span class="s2">(self.</span><span class="s1">handle_conn</span><span class="s2">, self.</span><span class="s1">host</span><span class="s2">, self.</span><span class="s1">port</span><span class="s2">)</span>
+        <span class="s1">addrs </span><span class="s2">= &quot;</span><span class="s7">, </span><span class="s2">&quot;.</span><span class="s1">join</span><span class="s2">(str(</span><span class="s1">sock</span><span class="s2">.</span><span class="s1">getsockname</span><span class="s2">()) </span><span class="s0">for </span><span class="s1">sock </span><span class="s0">in </span><span class="s1">server</span><span class="s2">.</span><span class="s1">sockets </span><span class="s0">or </span><span class="s2">[])</span>
+        <span class="s2">print(</span><span class="s0">f</span><span class="s7">&quot;Introducer listening on </span><span class="s3">{</span><span class="s1">addrs</span><span class="s3">}</span><span class="s7">&quot;</span><span class="s2">)</span>
+        <span class="s0">async with </span><span class="s1">server</span><span class="s2">:</span>
+            <span class="s0">await </span><span class="s1">server</span><span class="s2">.</span><span class="s1">serve_forever</span><span class="s2">()</span>
+
+    <span class="s0">async def </span><span class="s6">handle_conn</span><span class="s2">(self, reader: </span><span class="s1">asyncio</span><span class="s2">.</span><span class="s1">StreamReader</span><span class="s2">, writer: </span><span class="s1">asyncio</span><span class="s2">.</span><span class="s1">StreamWriter</span><span class="s2">) -&gt; </span><span class="s3">None</span><span class="s2">:</span>
+        <span class="s1">ctx </span><span class="s2">= </span><span class="s1">ConnectionContext</span><span class="s2">(</span><span class="s1">reader</span><span class="s2">, </span><span class="s1">writer</span><span class="s2">)</span>
+        <span class="s2">self.</span><span class="s1">conn_to_ctx</span><span class="s2">[</span><span class="s1">writer</span><span class="s2">] = </span><span class="s1">ctx 
+        </span><span class="s0">try</span><span class="s2">:</span>
+            <span class="s0">while </span><span class="s3">True</span><span class="s2">:</span>
+                <span class="s1">frame </span><span class="s2">= </span><span class="s0">await </span><span class="s1">read_frame</span><span class="s2">(</span><span class="s1">reader</span><span class="s2">)</span>
+                <span class="s0">if </span><span class="s1">frame </span><span class="s2">is </span><span class="s3">None</span><span class="s2">:</span>
+                    <span class="s0">break</span>
+                <span class="s0">await </span><span class="s2">self.</span><span class="s1">process_frame</span><span class="s2">(</span><span class="s1">ctx</span><span class="s2">, </span><span class="s1">frame</span><span class="s2">)</span>
+        <span class="s0">except </span><span class="s1">asyncio</span><span class="s2">.</span><span class="s1">IncompleteReadError</span><span class="s2">:</span>
+            <span class="s0">pass</span>
+        <span class="s0">except </span><span class="s2">Exception </span><span class="s0">as </span><span class="s1">exc</span><span class="s2">:</span>
+            <span class="s2">print(</span><span class="s0">f</span><span class="s7">&quot;Conn error: </span><span class="s3">{</span><span class="s1">exc</span><span class="s3">}</span><span class="s7">&quot;</span><span class="s2">)</span>
+        <span class="s0">finally</span><span class="s2">:</span>
+            <span class="s0">try</span><span class="s2">:</span>
+                <span class="s1">writer</span><span class="s2">.</span><span class="s1">close</span><span class="s2">()</span>
+                <span class="s0">await </span><span class="s1">writer</span><span class="s2">.</span><span class="s1">wait_closed</span><span class="s2">()</span>
+            <span class="s0">except </span><span class="s2">Exception:</span>
+                <span class="s0">pass</span>
+            <span class="s2">self.</span><span class="s1">conn_to_ctx</span><span class="s2">.</span><span class="s1">pop</span><span class="s2">(</span><span class="s1">writer</span><span class="s2">, </span><span class="s3">None</span><span class="s2">)</span>
+
+    <span class="s0">async def </span><span class="s6">process_frame</span><span class="s2">(self, ctx: </span><span class="s1">ConnectionContext</span><span class="s2">, frame: </span><span class="s1">Dict</span><span class="s2">[str, </span><span class="s1">Any</span><span class="s2">]) -&gt; </span><span class="s3">None</span><span class="s2">:</span>
+        <span class="s1">msg_type </span><span class="s2">= </span><span class="s1">frame</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(&quot;</span><span class="s7">msg_type</span><span class="s2">&quot;)</span>
+        <span class="s1">msg_id </span><span class="s2">= </span><span class="s1">frame</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(&quot;</span><span class="s7">msg_id</span><span class="s2">&quot;)</span>
+        <span class="s1">nonce </span><span class="s2">= </span><span class="s1">frame</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(&quot;</span><span class="s7">nonce</span><span class="s2">&quot;)</span>
+
+        <span class="s2"># </span><span class="s5">1) Strict signature verification (required for all messages)</span>
+        <span class="s0">if </span><span class="s2">not </span><span class="s1">m</span><span class="s2">.</span><span class="s1">verify</span><span class="s2">(</span><span class="s1">frame</span><span class="s2">):</span>
+            <span class="s1">err </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">new_envelope</span><span class="s2">(</span><span class="s1">m</span><span class="s2">.</span><span class="s3">ERROR</span><span class="s2">, from_id=&quot;</span><span class="s7">introducer</span><span class="s2">&quot;)</span>
+            <span class="s1">err</span><span class="s2">[&quot;</span><span class="s7">body</span><span class="s2">&quot;] = {&quot;</span><span class="s7">reason</span><span class="s2">&quot;: &quot;</span><span class="s7">bad signature</span><span class="s2">&quot;}</span>
+            <span class="s1">err </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">sign</span><span class="s2">(</span><span class="s1">err</span><span class="s2">)</span>
+            <span class="s0">await </span><span class="s1">write_frame</span><span class="s2">(</span><span class="s1">ctx</span><span class="s2">.</span><span class="s1">writer</span><span class="s2">, </span><span class="s1">err</span><span class="s2">)</span>
+            <span class="s0">return</span>
+
+        <span class="s2"># </span><span class="s5">2) Replay protection (msg_id + nonce) for ALL message types</span>
+        <span class="s0">if </span><span class="s1">msg_id</span><span class="s2">:</span>
+            <span class="s0">if </span><span class="s1">msg_id </span><span class="s2">in self.</span><span class="s1">msg_cache</span><span class="s2">:</span>
+                <span class="s0">return</span>
+            <span class="s2">self.</span><span class="s1">msg_cache</span><span class="s2">.</span><span class="s1">add</span><span class="s2">(</span><span class="s1">msg_id</span><span class="s2">)</span>
+            <span class="s0">if </span><span class="s2">len(self.</span><span class="s1">msg_cache</span><span class="s2">) &gt; </span><span class="s4">16384</span><span class="s2">:</span>
+                <span class="s2">self.</span><span class="s1">msg_cache</span><span class="s2">.</span><span class="s1">pop</span><span class="s2">()</span>
+        <span class="s0">if </span><span class="s1">nonce</span><span class="s2">:</span>
+            <span class="s0">if </span><span class="s1">nonce </span><span class="s2">in self.</span><span class="s1">nonce_cache</span><span class="s2">:</span>
+                <span class="s0">return</span>
+            <span class="s2">self.</span><span class="s1">nonce_cache</span><span class="s2">.</span><span class="s1">add</span><span class="s2">(</span><span class="s1">nonce</span><span class="s2">)</span>
+            <span class="s0">if </span><span class="s2">len(self.</span><span class="s1">nonce_cache</span><span class="s2">) &gt; </span><span class="s4">16384</span><span class="s2">:</span>
+                <span class="s2">self.</span><span class="s1">nonce_cache</span><span class="s2">.</span><span class="s1">pop</span><span class="s2">()</span>
+
+        <span class="s2"># </span><span class="s5">3) Normal handling</span>
+        <span class="s0">if </span><span class="s1">msg_type </span><span class="s2">== </span><span class="s1">m</span><span class="s2">.</span><span class="s3">HELLO</span><span class="s2">:</span>
+            <span class="s1">ctx</span><span class="s2">.</span><span class="s1">peer_id </span><span class="s2">= </span><span class="s1">frame</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(&quot;</span><span class="s7">from</span><span class="s2">&quot;)</span>
+            <span class="s0">return</span>
+
+        <span class="s0">if </span><span class="s1">msg_type </span><span class="s2">== </span><span class="s1">m</span><span class="s2">.</span><span class="s3">PRESENCE_UPDATE</span><span class="s2">:</span>
+            <span class="s1">user_id </span><span class="s2">= </span><span class="s1">frame</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(&quot;</span><span class="s7">from</span><span class="s2">&quot;)</span>
+            <span class="s1">body </span><span class="s2">= </span><span class="s1">frame</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(&quot;</span><span class="s7">body</span><span class="s2">&quot;, {})</span>
+            <span class="s2">self.</span><span class="s1">presence</span><span class="s2">.</span><span class="s1">update</span><span class="s2">(</span><span class="s1">user_id </span><span class="s0">or </span><span class="s2">&quot;&quot;, {</span>
+                <span class="s2">&quot;</span><span class="s7">last_seen</span><span class="s2">&quot;: </span><span class="s1">frame</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(&quot;</span><span class="s7">timestamp_ms</span><span class="s2">&quot;),</span>
+                <span class="s2">&quot;</span><span class="s7">status</span><span class="s2">&quot;: </span><span class="s1">body</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(&quot;</span><span class="s7">status</span><span class="s2">&quot;, &quot;</span><span class="s7">online</span><span class="s2">&quot;),</span>
+                <span class="s2">&quot;</span><span class="s7">addr</span><span class="s2">&quot;: str(</span><span class="s1">ctx</span><span class="s2">.</span><span class="s1">writer</span><span class="s2">.</span><span class="s1">get_extra_info</span><span class="s2">(&quot;</span><span class="s7">peername</span><span class="s2">&quot;)),</span>
+            <span class="s2">})</span>
+            <span class="s0">return</span>
+
+        <span class="s0">if </span><span class="s1">msg_type </span><span class="s2">== </span><span class="s1">m</span><span class="s2">.</span><span class="s3">MEMBER_LIST_REQUEST</span><span class="s2">:</span>
+            <span class="s1">listing </span><span class="s2">= self.</span><span class="s1">presence</span><span class="s2">.</span><span class="s1">list_members</span><span class="s2">()</span>
+            <span class="s1">resp </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">new_envelope</span><span class="s2">(</span><span class="s1">m</span><span class="s2">.</span><span class="s3">MEMBER_LIST_RESPONSE</span><span class="s2">, from_id=&quot;</span><span class="s7">introducer</span><span class="s2">&quot;)</span>
+            <span class="s1">resp</span><span class="s2">[&quot;</span><span class="s7">body</span><span class="s2">&quot;] = {&quot;</span><span class="s7">members</span><span class="s2">&quot;: </span><span class="s1">listing</span><span class="s2">}</span>
+            <span class="s1">resp </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">sign</span><span class="s2">(</span><span class="s1">resp</span><span class="s2">)</span>
+            <span class="s0">await </span><span class="s1">write_frame</span><span class="s2">(</span><span class="s1">ctx</span><span class="s2">.</span><span class="s1">writer</span><span class="s2">, </span><span class="s1">resp</span><span class="s2">)</span>
+            <span class="s0">return</span>
+
+        <span class="s0">if </span><span class="s1">msg_type </span><span class="s2">in (</span><span class="s1">m</span><span class="s2">.</span><span class="s3">DIRECT_MSG</span><span class="s2">, </span><span class="s1">m</span><span class="s2">.</span><span class="s3">GROUP_MSG</span><span class="s2">, </span><span class="s1">m</span><span class="s2">.</span><span class="s3">FILE_OFFER</span><span class="s2">, </span><span class="s1">m</span><span class="s2">.</span><span class="s3">FILE_ACCEPT</span><span class="s2">, </span><span class="s1">m</span><span class="s2">.</span><span class="s3">FILE_CHUNK</span><span class="s2">, </span><span class="s1">m</span><span class="s2">.</span><span class="s3">FILE_COMPLETE</span><span class="s2">):</span>
+            <span class="s1">ttl </span><span class="s2">= int(</span><span class="s1">frame</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(&quot;</span><span class="s7">ttl</span><span class="s2">&quot;, </span><span class="s4">0</span><span class="s2">))</span>
+            <span class="s0">if </span><span class="s1">ttl </span><span class="s2">&lt;= </span><span class="s4">0 </span><span class="s2">or </span><span class="s1">ttl </span><span class="s2">&gt; </span><span class="s3">SAFE_MAX_TTL</span><span class="s2">:</span>
+                <span class="s0">return</span>
+            <span class="s1">frame</span><span class="s2">[&quot;</span><span class="s7">ttl</span><span class="s2">&quot;] = </span><span class="s1">ttl </span><span class="s2">- </span><span class="s4">1</span>
+            <span class="s0">await </span><span class="s2">self.</span><span class="s1">broadcast</span><span class="s2">(</span><span class="s1">frame</span><span class="s2">, exclude=</span><span class="s1">ctx</span><span class="s2">.</span><span class="s1">writer</span><span class="s2">)</span>
+            <span class="s0">return</span>
+
+        <span class="s0">if </span><span class="s1">msg_type </span><span class="s2">== </span><span class="s1">m</span><span class="s2">.</span><span class="s3">PING</span><span class="s2">:</span>
+            <span class="s1">pong </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">new_envelope</span><span class="s2">(</span><span class="s1">m</span><span class="s2">.</span><span class="s3">PONG</span><span class="s2">, from_id=&quot;</span><span class="s7">introducer</span><span class="s2">&quot;)</span>
+            <span class="s1">pong</span><span class="s2">[&quot;</span><span class="s7">body</span><span class="s2">&quot;] = {&quot;</span><span class="s7">echo</span><span class="s2">&quot;: </span><span class="s1">frame</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(&quot;</span><span class="s7">body</span><span class="s2">&quot;)}</span>
+            <span class="s1">pong </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">sign</span><span class="s2">(</span><span class="s1">pong</span><span class="s2">)</span>
+            <span class="s0">await </span><span class="s1">write_frame</span><span class="s2">(</span><span class="s1">ctx</span><span class="s2">.</span><span class="s1">writer</span><span class="s2">, </span><span class="s1">pong</span><span class="s2">)</span>
+            <span class="s0">return</span>
+
+    <span class="s0">async def </span><span class="s6">broadcast</span><span class="s2">(self, frame: </span><span class="s1">Dict</span><span class="s2">[str, </span><span class="s1">Any</span><span class="s2">], exclude: </span><span class="s1">Optional</span><span class="s2">[</span><span class="s1">asyncio</span><span class="s2">.</span><span class="s1">StreamWriter</span><span class="s2">] = </span><span class="s3">None</span><span class="s2">) -&gt; </span><span class="s3">None</span><span class="s2">:</span>
+        <span class="s0">for </span><span class="s1">w</span><span class="s2">, </span><span class="s1">_ctx </span><span class="s0">in </span><span class="s2">list(self.</span><span class="s1">conn_to_ctx</span><span class="s2">.</span><span class="s1">items</span><span class="s2">()):</span>
+            <span class="s0">if </span><span class="s1">w </span><span class="s2">is </span><span class="s1">exclude</span><span class="s2">:</span>
+                <span class="s0">continue</span>
+            <span class="s0">try</span><span class="s2">:</span>
+                <span class="s0">await </span><span class="s1">write_frame</span><span class="s2">(</span><span class="s1">w</span><span class="s2">, </span><span class="s1">frame</span><span class="s2">)</span>
+            <span class="s0">except </span><span class="s2">Exception:</span>
+                <span class="s0">pass</span>
+
+<span class="s0">class </span><span class="s2">ClientNode:</span>
+    <span class="s2">&quot;&quot;&quot;</span>
+    <span class="s7">Hardened client: 
+      - Verifies signatures on inbound frames. 
+      - Sanitizes file paths (basename only) and confines to a safe directory. 
+    </span><span class="s2">&quot;&quot;&quot;</span>
+    <span class="s0">def </span><span class="s2">__init__(self, node_id: str, introducer: </span><span class="s1">Tuple</span><span class="s2">[str, int], listen: </span><span class="s1">Optional</span><span class="s2">[</span><span class="s1">Tuple</span><span class="s2">[str, int]] = </span><span class="s3">None</span><span class="s2">) -&gt; </span><span class="s3">None</span><span class="s2">:</span>
+        <span class="s2">self.</span><span class="s1">node_id </span><span class="s2">= </span><span class="s1">node_id 
+        </span><span class="s2">self.</span><span class="s1">introducer </span><span class="s2">= </span><span class="s1">introducer 
+        </span><span class="s2">self.</span><span class="s1">listen </span><span class="s2">= </span><span class="s1">listen 
+        </span><span class="s2">self.</span><span class="s1">inbox</span><span class="s2">: </span><span class="s1">asyncio</span><span class="s2">.</span><span class="s1">Queue</span><span class="s2">[</span><span class="s1">Dict</span><span class="s2">[str, </span><span class="s1">Any</span><span class="s2">]] = </span><span class="s1">asyncio</span><span class="s2">.</span><span class="s1">Queue</span><span class="s2">()</span>
+        <span class="s2">self.</span><span class="s1">peers</span><span class="s2">: </span><span class="s1">Dict</span><span class="s2">[str, </span><span class="s1">Tuple</span><span class="s2">[</span><span class="s1">asyncio</span><span class="s2">.</span><span class="s1">StreamReader</span><span class="s2">, </span><span class="s1">asyncio</span><span class="s2">.</span><span class="s1">StreamWriter</span><span class="s2">]] = {}</span>
+        <span class="s2">self.</span><span class="s1">download_root </span><span class="s2">= </span><span class="s1">Path</span><span class="s2">(</span><span class="s1">os</span><span class="s2">.</span><span class="s1">environ</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(&quot;</span><span class="s7">SOCP_DOWNLOAD_DIR</span><span class="s2">&quot;, &quot;</span><span class="s7">./downloads</span><span class="s2">&quot;)).</span><span class="s1">resolve</span><span class="s2">()</span>
+        <span class="s2">self.</span><span class="s1">download_root</span><span class="s2">.</span><span class="s1">mkdir</span><span class="s2">(parents=</span><span class="s3">True</span><span class="s2">, exist_ok=</span><span class="s3">True</span><span class="s2">)</span>
+
+    <span class="s0">def </span><span class="s6">_safe_path</span><span class="s2">(self, file_id: str) -&gt; </span><span class="s1">Path</span><span class="s2">:</span>
+        <span class="s1">safe_name </span><span class="s2">= </span><span class="s1">Path</span><span class="s2">(</span><span class="s1">file_id</span><span class="s2">).</span><span class="s1">name           </span><span class="s2"># </span><span class="s5">strip directories</span>
+        <span class="s1">p </span><span class="s2">= (self.</span><span class="s1">download_root </span><span class="s2">/ </span><span class="s1">safe_name</span><span class="s2">).</span><span class="s1">resolve</span><span class="s2">()</span>
+        <span class="s0">if </span><span class="s2">not str(</span><span class="s1">p</span><span class="s2">).</span><span class="s1">startswith</span><span class="s2">(str(self.</span><span class="s1">download_root</span><span class="s2">)):</span>
+            <span class="s0">raise </span><span class="s2">ValueError(&quot;</span><span class="s7">Unsafe path</span><span class="s2">&quot;)</span>
+        <span class="s0">return </span><span class="s1">p 
+</span>
+    <span class="s0">async def </span><span class="s6">start</span><span class="s2">(self) -&gt; </span><span class="s3">None</span><span class="s2">:</span>
+        <span class="s1">intro_reader</span><span class="s2">, </span><span class="s1">intro_writer </span><span class="s2">= </span><span class="s0">await </span><span class="s1">asyncio</span><span class="s2">.</span><span class="s1">open_connection</span><span class="s2">(self.</span><span class="s1">introducer</span><span class="s2">[</span><span class="s4">0</span><span class="s2">], self.</span><span class="s1">introducer</span><span class="s2">[</span><span class="s4">1</span><span class="s2">])</span>
+        <span class="s2">self.</span><span class="s1">peers</span><span class="s2">[&quot;</span><span class="s7">introducer</span><span class="s2">&quot;] = (</span><span class="s1">intro_reader</span><span class="s2">, </span><span class="s1">intro_writer</span><span class="s2">)</span>
+
+        <span class="s1">hello </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">new_envelope</span><span class="s2">(</span><span class="s1">m</span><span class="s2">.</span><span class="s3">HELLO</span><span class="s2">, from_id=self.</span><span class="s1">node_id</span><span class="s2">)</span>
+        <span class="s1">hello </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">sign</span><span class="s2">(</span><span class="s1">hello</span><span class="s2">)</span>
+        <span class="s0">await </span><span class="s1">write_frame</span><span class="s2">(</span><span class="s1">intro_writer</span><span class="s2">, </span><span class="s1">hello</span><span class="s2">)</span>
+
+        <span class="s0">await </span><span class="s2">self.</span><span class="s1">send_presence</span><span class="s2">(status=&quot;</span><span class="s7">online</span><span class="s2">&quot;)</span>
+        <span class="s1">asyncio</span><span class="s2">.</span><span class="s1">create_task</span><span class="s2">(self.</span><span class="s1">reader_loop</span><span class="s2">(&quot;</span><span class="s7">introducer</span><span class="s2">&quot;, </span><span class="s1">intro_reader</span><span class="s2">))</span>
+
+        <span class="s0">if </span><span class="s2">self.</span><span class="s1">listen</span><span class="s2">:</span>
+            <span class="s1">server </span><span class="s2">= </span><span class="s0">await </span><span class="s1">asyncio</span><span class="s2">.</span><span class="s1">start_server</span><span class="s2">(self.</span><span class="s1">handle_conn</span><span class="s2">, self.</span><span class="s1">listen</span><span class="s2">[</span><span class="s4">0</span><span class="s2">], self.</span><span class="s1">listen</span><span class="s2">[</span><span class="s4">1</span><span class="s2">])</span>
+            <span class="s2">print(</span><span class="s0">f</span><span class="s7">&quot;Client </span><span class="s3">{</span><span class="s2">self.</span><span class="s1">node_id</span><span class="s3">} </span><span class="s7">listening on </span><span class="s3">{</span><span class="s2">self.</span><span class="s1">listen</span><span class="s3">}</span><span class="s7">&quot;</span><span class="s2">)</span>
+            <span class="s1">asyncio</span><span class="s2">.</span><span class="s1">create_task</span><span class="s2">(</span><span class="s1">server</span><span class="s2">.</span><span class="s1">serve_forever</span><span class="s2">())</span>
+
+    <span class="s0">async def </span><span class="s6">handle_conn</span><span class="s2">(self, reader: </span><span class="s1">asyncio</span><span class="s2">.</span><span class="s1">StreamReader</span><span class="s2">, writer: </span><span class="s1">asyncio</span><span class="s2">.</span><span class="s1">StreamWriter</span><span class="s2">) -&gt; </span><span class="s3">None</span><span class="s2">:</span>
+        <span class="s0">try</span><span class="s2">:</span>
+            <span class="s0">while </span><span class="s3">True</span><span class="s2">:</span>
+                <span class="s1">frame </span><span class="s2">= </span><span class="s0">await </span><span class="s1">read_frame</span><span class="s2">(</span><span class="s1">reader</span><span class="s2">)</span>
+                <span class="s0">await </span><span class="s2">self.</span><span class="s1">inbox</span><span class="s2">.</span><span class="s1">put</span><span class="s2">(</span><span class="s1">frame</span><span class="s2">)</span>
+        <span class="s0">except </span><span class="s2">Exception:</span>
+            <span class="s0">pass</span>
+        <span class="s0">finally</span><span class="s2">:</span>
+            <span class="s0">try</span><span class="s2">:</span>
+                <span class="s1">writer</span><span class="s2">.</span><span class="s1">close</span><span class="s2">()</span>
+                <span class="s0">await </span><span class="s1">writer</span><span class="s2">.</span><span class="s1">wait_closed</span><span class="s2">()</span>
+            <span class="s0">except </span><span class="s2">Exception:</span>
+                <span class="s0">pass</span>
+
+    <span class="s0">async def </span><span class="s6">reader_loop</span><span class="s2">(self, label: str, reader: </span><span class="s1">asyncio</span><span class="s2">.</span><span class="s1">StreamReader</span><span class="s2">) -&gt; </span><span class="s3">None</span><span class="s2">:</span>
+        <span class="s0">try</span><span class="s2">:</span>
+            <span class="s0">while </span><span class="s3">True</span><span class="s2">:</span>
+                <span class="s1">frame </span><span class="s2">= </span><span class="s0">await </span><span class="s1">read_frame</span><span class="s2">(</span><span class="s1">reader</span><span class="s2">)</span>
+                <span class="s0">await </span><span class="s2">self.</span><span class="s1">process_incoming</span><span class="s2">(</span><span class="s1">frame</span><span class="s2">)</span>
+        <span class="s0">except </span><span class="s2">Exception:</span>
+            <span class="s0">pass</span>
+
+    <span class="s0">async def </span><span class="s6">process_incoming</span><span class="s2">(self, frame: </span><span class="s1">Dict</span><span class="s2">[str, </span><span class="s1">Any</span><span class="s2">]) -&gt; </span><span class="s3">None</span><span class="s2">:</span>
+        <span class="s0">if </span><span class="s2">not </span><span class="s1">m</span><span class="s2">.</span><span class="s1">verify</span><span class="s2">(</span><span class="s1">frame</span><span class="s2">):</span>
+            <span class="s0">return  </span><span class="s2"># </span><span class="s5">drop unauthentic frames</span>
+
+        <span class="s1">mt </span><span class="s2">= </span><span class="s1">frame</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(&quot;</span><span class="s7">msg_type</span><span class="s2">&quot;)</span>
+        <span class="s0">if </span><span class="s1">mt </span><span class="s2">in (</span><span class="s1">m</span><span class="s2">.</span><span class="s3">DIRECT_MSG</span><span class="s2">, </span><span class="s1">m</span><span class="s2">.</span><span class="s3">GROUP_MSG</span><span class="s2">):</span>
+            <span class="s0">await </span><span class="s2">self.</span><span class="s1">inbox</span><span class="s2">.</span><span class="s1">put</span><span class="s2">(</span><span class="s1">frame</span><span class="s2">)</span>
+        <span class="s0">elif </span><span class="s1">mt </span><span class="s2">== </span><span class="s1">mFILE_OFFER </span><span class="s2">:= </span><span class="s1">m</span><span class="s2">.</span><span class="s3">FILE_OFFER</span><span class="s2">:</span>
+            <span class="s0">await </span><span class="s2">self.</span><span class="s1">inbox</span><span class="s2">.</span><span class="s1">put</span><span class="s2">(</span><span class="s1">frame</span><span class="s2">)</span>
+        <span class="s0">elif </span><span class="s1">mt </span><span class="s2">== </span><span class="s1">m</span><span class="s2">.</span><span class="s3">FILE_CHUNK</span><span class="s2">:</span>
+            <span class="s1">b </span><span class="s2">= </span><span class="s1">frame</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(&quot;</span><span class="s7">body</span><span class="s2">&quot;, {})</span>
+            <span class="s1">file_id </span><span class="s2">= </span><span class="s1">b</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(&quot;</span><span class="s7">file_id</span><span class="s2">&quot;, &quot;</span><span class="s7">recv.bin</span><span class="s2">&quot;)</span>
+            <span class="s1">data_hex </span><span class="s2">= </span><span class="s1">b</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(&quot;</span><span class="s7">data_b64</span><span class="s2">&quot;, &quot;&quot;)</span>
+            <span class="s1">data </span><span class="s2">= bytes.</span><span class="s1">fromhex</span><span class="s2">(</span><span class="s1">data_hex</span><span class="s2">)</span>
+            <span class="s1">dst </span><span class="s2">= self.</span><span class="s1">_safe_path</span><span class="s2">(</span><span class="s1">file_id</span><span class="s2">)</span>
+            <span class="s0">with </span><span class="s1">dst</span><span class="s2">.</span><span class="s1">open</span><span class="s2">(&quot;</span><span class="s7">ab</span><span class="s2">&quot;) </span><span class="s0">as </span><span class="s1">f</span><span class="s2">:</span>
+                <span class="s1">f</span><span class="s2">.</span><span class="s1">write</span><span class="s2">(</span><span class="s1">data</span><span class="s2">)</span>
+        <span class="s0">elif </span><span class="s1">mt </span><span class="s2">== </span><span class="s1">m</span><span class="s2">.</span><span class="s3">FILE_COMPLETE</span><span class="s2">:</span>
+            <span class="s0">await </span><span class="s2">self.</span><span class="s1">inbox</span><span class="s2">.</span><span class="s1">put</span><span class="s2">(</span><span class="s1">frame</span><span class="s2">)</span>
+        <span class="s0">else</span><span class="s2">:</span>
+            <span class="s0">await </span><span class="s2">self.</span><span class="s1">inbox</span><span class="s2">.</span><span class="s1">put</span><span class="s2">(</span><span class="s1">frame</span><span class="s2">)</span>
+
+    <span class="s0">async def </span><span class="s6">send_presence</span><span class="s2">(self, status: str = &quot;</span><span class="s7">online</span><span class="s2">&quot;) -&gt; </span><span class="s3">None</span><span class="s2">:</span>
+        <span class="s1">_</span><span class="s2">, </span><span class="s1">w </span><span class="s2">= self.</span><span class="s1">peers</span><span class="s2">[&quot;</span><span class="s7">introducer</span><span class="s2">&quot;]</span>
+        <span class="s1">env </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">new_envelope</span><span class="s2">(</span><span class="s1">m</span><span class="s2">.</span><span class="s3">PRESENCE_UPDATE</span><span class="s2">, from_id=self.</span><span class="s1">node_id</span><span class="s2">)</span>
+        <span class="s1">env</span><span class="s2">[&quot;</span><span class="s7">body</span><span class="s2">&quot;] = {&quot;</span><span class="s7">status</span><span class="s2">&quot;: </span><span class="s1">status</span><span class="s2">}</span>
+        <span class="s1">env </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">sign</span><span class="s2">(</span><span class="s1">env</span><span class="s2">)</span>
+        <span class="s0">await </span><span class="s1">write_frame</span><span class="s2">(</span><span class="s1">w</span><span class="s2">, </span><span class="s1">env</span><span class="s2">)</span>
+
+    <span class="s0">async def </span><span class="s6">request_members</span><span class="s2">(self) -&gt; </span><span class="s1">Dict</span><span class="s2">[str, </span><span class="s1">Any</span><span class="s2">]:</span>
+        <span class="s1">r</span><span class="s2">, </span><span class="s1">w </span><span class="s2">= self.</span><span class="s1">peers</span><span class="s2">[&quot;</span><span class="s7">introducer</span><span class="s2">&quot;]</span>
+        <span class="s1">req </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">new_envelope</span><span class="s2">(</span><span class="s1">m</span><span class="s2">.</span><span class="s3">MEMBER_LIST_REQUEST</span><span class="s2">, from_id=self.</span><span class="s1">node_id</span><span class="s2">)</span>
+        <span class="s1">req </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">sign</span><span class="s2">(</span><span class="s1">req</span><span class="s2">)</span>
+        <span class="s0">await </span><span class="s1">write_frame</span><span class="s2">(</span><span class="s1">w</span><span class="s2">, </span><span class="s1">req</span><span class="s2">)</span>
+        <span class="s0">while </span><span class="s3">True</span><span class="s2">:</span>
+            <span class="s1">frame </span><span class="s2">= </span><span class="s0">await </span><span class="s2">self.</span><span class="s1">inbox</span><span class="s2">.</span><span class="s1">get</span><span class="s2">()</span>
+            <span class="s0">if </span><span class="s1">frame</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(&quot;</span><span class="s7">msg_type</span><span class="s2">&quot;) == </span><span class="s1">m</span><span class="s2">.</span><span class="s3">MEMBER_LIST_RESPONSE</span><span class="s2">:</span>
+                <span class="s0">return </span><span class="s1">frame</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(&quot;</span><span class="s7">body</span><span class="s2">&quot;, {}).</span><span class="s1">get</span><span class="s2">(&quot;</span><span class="s7">members</span><span class="s2">&quot;, {})</span>
+
+    <span class="s0">async def </span><span class="s6">send_direct</span><span class="s2">(self, to_id: str, content: str) -&gt; </span><span class="s3">None</span><span class="s2">:</span>
+        <span class="s1">_</span><span class="s2">, </span><span class="s1">w </span><span class="s2">= self.</span><span class="s1">peers</span><span class="s2">[&quot;</span><span class="s7">introducer</span><span class="s2">&quot;]</span>
+        <span class="s1">env </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">new_envelope</span><span class="s2">(</span><span class="s1">m</span><span class="s2">.</span><span class="s3">DIRECT_MSG</span><span class="s2">, from_id=self.</span><span class="s1">node_id</span><span class="s2">, to_id=</span><span class="s1">to_id</span><span class="s2">)</span>
+        <span class="s1">env</span><span class="s2">[&quot;</span><span class="s7">body</span><span class="s2">&quot;] = {&quot;</span><span class="s7">content_type</span><span class="s2">&quot;: &quot;</span><span class="s7">text/plain</span><span class="s2">&quot;, &quot;</span><span class="s7">content</span><span class="s2">&quot;: </span><span class="s1">content</span><span class="s2">}</span>
+        <span class="s1">env </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">sign</span><span class="s2">(</span><span class="s1">env</span><span class="s2">)</span>
+        <span class="s0">await </span><span class="s1">write_frame</span><span class="s2">(</span><span class="s1">w</span><span class="s2">, </span><span class="s1">env</span><span class="s2">)</span>
+
+    <span class="s0">async def </span><span class="s6">send_group</span><span class="s2">(self, group: str, content: str) -&gt; </span><span class="s3">None</span><span class="s2">:</span>
+        <span class="s1">_</span><span class="s2">, </span><span class="s1">w </span><span class="s2">= self.</span><span class="s1">peers</span><span class="s2">[&quot;</span><span class="s7">introducer</span><span class="s2">&quot;]</span>
+        <span class="s1">env </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">new_envelope</span><span class="s2">(</span><span class="s1">m</span><span class="s2">.</span><span class="s3">GROUP_MSG</span><span class="s2">, from_id=self.</span><span class="s1">node_id</span><span class="s2">, group=</span><span class="s1">group</span><span class="s2">)</span>
+        <span class="s1">env</span><span class="s2">[&quot;</span><span class="s7">body</span><span class="s2">&quot;] = {&quot;</span><span class="s7">content_type</span><span class="s2">&quot;: &quot;</span><span class="s7">text/plain</span><span class="s2">&quot;, &quot;</span><span class="s7">content</span><span class="s2">&quot;: </span><span class="s1">content</span><span class="s2">}</span>
+        <span class="s1">env </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">sign</span><span class="s2">(</span><span class="s1">env</span><span class="s2">)</span>
+        <span class="s0">await </span><span class="s1">write_frame</span><span class="s2">(</span><span class="s1">w</span><span class="s2">, </span><span class="s1">env</span><span class="s2">)</span>
+
+</pre>
+</body>
+</html>

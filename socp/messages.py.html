@@ -1,0 +1,100 @@
+<html>
+<head>
+<title>messages.py</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #cf8e6d;}
+.s1 { color: #bcbec4;}
+.s2 { color: #bcbec4;}
+.s3 { color: #c77dbb; font-style: italic;}
+.s4 { color: #6aab73;}
+.s5 { color: #56a8f5;}
+.s6 { color: #2aacb8; font-style: italic;}
+.s7 { color: #7a7e85;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+messages.py</font>
+</center></td></tr></table>
+<pre><span class="s0">import </span><span class="s1">time 
+</span><span class="s0">import </span><span class="s1">uuid 
+</span><span class="s0">import </span><span class="s1">os 
+</span><span class="s0">import </span><span class="s1">hmac 
+</span><span class="s0">import </span><span class="s1">hashlib 
+</span><span class="s0">from </span><span class="s1">typing </span><span class="s0">import </span><span class="s1">Any</span><span class="s2">, </span><span class="s1">Dict</span><span class="s2">, </span><span class="s1">Optional 
+</span>
+<span class="s3">VERSION </span><span class="s2">= &quot;</span><span class="s4">1.1-clean</span><span class="s2">&quot;</span>
+
+<span class="s0">def </span><span class="s5">now_ms</span><span class="s2">() -&gt; int:</span>
+    <span class="s0">return </span><span class="s2">int(</span><span class="s1">time</span><span class="s2">.</span><span class="s1">time</span><span class="s2">() * </span><span class="s6">1000</span><span class="s2">)</span>
+
+<span class="s0">def </span><span class="s5">new_envelope</span><span class="s2">(msg_type: str,</span>
+                 <span class="s2">from_id: str,</span>
+                 <span class="s2">to_id: </span><span class="s1">Optional</span><span class="s2">[str] = </span><span class="s3">None</span><span class="s2">,</span>
+                 <span class="s2">group: </span><span class="s1">Optional</span><span class="s2">[str] = </span><span class="s3">None</span><span class="s2">,</span>
+                 <span class="s2">ttl: int = </span><span class="s6">8</span><span class="s2">) -&gt; </span><span class="s1">Dict</span><span class="s2">[str, </span><span class="s1">Any</span><span class="s2">]:</span>
+    <span class="s2">&quot;&quot;&quot;</span><span class="s4">Standard envelope with msg_id + nonce for replay protection.</span><span class="s2">&quot;&quot;&quot;</span>
+    <span class="s0">return </span><span class="s2">{</span>
+        <span class="s2">&quot;</span><span class="s4">version</span><span class="s2">&quot;: </span><span class="s3">VERSION</span><span class="s2">,</span>
+        <span class="s2">&quot;</span><span class="s4">msg_type</span><span class="s2">&quot;: </span><span class="s1">msg_type</span><span class="s2">,</span>
+        <span class="s2">&quot;</span><span class="s4">msg_id</span><span class="s2">&quot;: str(</span><span class="s1">uuid</span><span class="s2">.</span><span class="s1">uuid4</span><span class="s2">()),</span>
+        <span class="s2">&quot;</span><span class="s4">timestamp_ms</span><span class="s2">&quot;: </span><span class="s1">now_ms</span><span class="s2">(),</span>
+        <span class="s2">&quot;</span><span class="s4">from</span><span class="s2">&quot;: </span><span class="s1">from_id</span><span class="s2">,</span>
+        <span class="s2">&quot;</span><span class="s4">to</span><span class="s2">&quot;: </span><span class="s1">to_id</span><span class="s2">,</span>
+        <span class="s2">&quot;</span><span class="s4">group</span><span class="s2">&quot;: </span><span class="s1">group</span><span class="s2">,</span>
+        <span class="s2">&quot;</span><span class="s4">ttl</span><span class="s2">&quot;: </span><span class="s1">ttl</span><span class="s2">,</span>
+        <span class="s2">&quot;</span><span class="s4">sig</span><span class="s2">&quot;: </span><span class="s3">None</span><span class="s2">,                    # </span><span class="s7">full-length HMAC in clean build</span>
+        <span class="s2">&quot;</span><span class="s4">nonce</span><span class="s2">&quot;: str(</span><span class="s1">uuid</span><span class="s2">.</span><span class="s1">uuid4</span><span class="s2">()),</span>
+        <span class="s2">&quot;</span><span class="s4">body</span><span class="s2">&quot;: {},</span>
+    <span class="s2">}</span>
+
+<span class="s2"># </span><span class="s7">Message types (no admin/backdoor types in clean build)</span>
+<span class="s3">HELLO </span><span class="s2">= &quot;</span><span class="s4">HELLO</span><span class="s2">&quot;</span>
+<span class="s3">PRESENCE_UPDATE </span><span class="s2">= &quot;</span><span class="s4">PRESENCE_UPDATE</span><span class="s2">&quot;</span>
+<span class="s3">MEMBER_LIST_REQUEST </span><span class="s2">= &quot;</span><span class="s4">MEMBER_LIST_REQUEST</span><span class="s2">&quot;</span>
+<span class="s3">MEMBER_LIST_RESPONSE </span><span class="s2">= &quot;</span><span class="s4">MEMBER_LIST_RESPONSE</span><span class="s2">&quot;</span>
+<span class="s3">DIRECT_MSG </span><span class="s2">= &quot;</span><span class="s4">DIRECT_MSG</span><span class="s2">&quot;</span>
+<span class="s3">GROUP_MSG </span><span class="s2">= &quot;</span><span class="s4">GROUP_MSG</span><span class="s2">&quot;</span>
+<span class="s3">ACK </span><span class="s2">= &quot;</span><span class="s4">ACK</span><span class="s2">&quot;</span>
+<span class="s3">ERROR </span><span class="s2">= &quot;</span><span class="s4">ERROR</span><span class="s2">&quot;</span>
+<span class="s3">FILE_OFFER </span><span class="s2">= &quot;</span><span class="s4">FILE_OFFER</span><span class="s2">&quot;</span>
+<span class="s3">FILE_ACCEPT </span><span class="s2">= &quot;</span><span class="s4">FILE_ACCEPT</span><span class="s2">&quot;</span>
+<span class="s3">FILE_CHUNK </span><span class="s2">= &quot;</span><span class="s4">FILE_CHUNK</span><span class="s2">&quot;</span>
+<span class="s3">FILE_COMPLETE </span><span class="s2">= &quot;</span><span class="s4">FILE_COMPLETE</span><span class="s2">&quot;</span>
+<span class="s3">PING </span><span class="s2">= &quot;</span><span class="s4">PING</span><span class="s2">&quot;</span>
+<span class="s3">PONG </span><span class="s2">= &quot;</span><span class="s4">PONG</span><span class="s2">&quot;</span>
+
+<span class="s0">def </span><span class="s5">hmac_key</span><span class="s2">() -&gt; bytes:</span>
+    <span class="s1">key </span><span class="s2">= </span><span class="s1">os</span><span class="s2">.</span><span class="s1">environ</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(&quot;</span><span class="s4">SOCP_HMAC_KEY</span><span class="s2">&quot;)</span>
+    <span class="s0">if </span><span class="s2">not </span><span class="s1">key</span><span class="s2">:</span>
+        <span class="s0">raise </span><span class="s2">RuntimeError(&quot;</span><span class="s4">SOCP_HMAC_KEY must be set for the clean build</span><span class="s2">&quot;)</span>
+    <span class="s0">return </span><span class="s1">key</span><span class="s2">.</span><span class="s1">encode</span><span class="s2">(&quot;</span><span class="s4">utf-8</span><span class="s2">&quot;)</span>
+
+<span class="s0">def </span><span class="s5">canonical_bytes</span><span class="s2">(env: </span><span class="s1">Dict</span><span class="s2">[str, </span><span class="s1">Any</span><span class="s2">]) -&gt; bytes:</span>
+    <span class="s0">import </span><span class="s1">json 
+    e </span><span class="s2">= {</span><span class="s1">k</span><span class="s2">: </span><span class="s1">v </span><span class="s0">for </span><span class="s1">k</span><span class="s2">, </span><span class="s1">v </span><span class="s0">in </span><span class="s1">env</span><span class="s2">.</span><span class="s1">items</span><span class="s2">() </span><span class="s0">if </span><span class="s1">k </span><span class="s2">!= &quot;</span><span class="s4">sig</span><span class="s2">&quot;}</span>
+    <span class="s0">return </span><span class="s1">json</span><span class="s2">.</span><span class="s1">dumps</span><span class="s2">(</span><span class="s1">e</span><span class="s2">, sort_keys=</span><span class="s3">True</span><span class="s2">, separators=(&quot;</span><span class="s4">,</span><span class="s2">&quot;, &quot;</span><span class="s4">:</span><span class="s2">&quot;)).</span><span class="s1">encode</span><span class="s2">(&quot;</span><span class="s4">utf-8</span><span class="s2">&quot;)</span>
+
+<span class="s0">def </span><span class="s5">sign</span><span class="s2">(env: </span><span class="s1">Dict</span><span class="s2">[str, </span><span class="s1">Any</span><span class="s2">]) -&gt; </span><span class="s1">Dict</span><span class="s2">[str, </span><span class="s1">Any</span><span class="s2">]:</span>
+    <span class="s1">mac </span><span class="s2">= </span><span class="s1">hmac</span><span class="s2">.</span><span class="s1">new</span><span class="s2">(</span><span class="s1">hmac_key</span><span class="s2">(), </span><span class="s1">canonical_bytes</span><span class="s2">(</span><span class="s1">env</span><span class="s2">), </span><span class="s1">hashlib</span><span class="s2">.</span><span class="s1">sha256</span><span class="s2">).</span><span class="s1">hexdigest</span><span class="s2">()</span>
+    <span class="s1">env</span><span class="s2">[&quot;</span><span class="s4">sig</span><span class="s2">&quot;] = </span><span class="s1">mac            </span><span class="s2"># </span><span class="s7">full 64 hex chars</span>
+    <span class="s0">return </span><span class="s1">env 
+</span>
+<span class="s0">def </span><span class="s5">verify</span><span class="s2">(env: </span><span class="s1">Dict</span><span class="s2">[str, </span><span class="s1">Any</span><span class="s2">]) -&gt; bool:</span>
+    <span class="s1">sig </span><span class="s2">= </span><span class="s1">env</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(&quot;</span><span class="s4">sig</span><span class="s2">&quot;)</span>
+    <span class="s0">if </span><span class="s2">not isinstance(</span><span class="s1">sig</span><span class="s2">, str) or len(</span><span class="s1">sig</span><span class="s2">) != </span><span class="s6">64</span><span class="s2">:</span>
+        <span class="s0">return </span><span class="s3">False</span>
+    <span class="s1">mac </span><span class="s2">= </span><span class="s1">hmac</span><span class="s2">.</span><span class="s1">new</span><span class="s2">(</span><span class="s1">hmac_key</span><span class="s2">(), </span><span class="s1">canonical_bytes</span><span class="s2">(</span><span class="s1">env</span><span class="s2">), </span><span class="s1">hashlib</span><span class="s2">.</span><span class="s1">sha256</span><span class="s2">).</span><span class="s1">hexdigest</span><span class="s2">()</span>
+    <span class="s2"># </span><span class="s7">constant-time comparison</span>
+    <span class="s0">return </span><span class="s1">hmac</span><span class="s2">.</span><span class="s1">compare_digest</span><span class="s2">(</span><span class="s1">mac</span><span class="s2">, </span><span class="s1">sig</span><span class="s2">)</span>
+
+<span class="s0">def </span><span class="s5">is_replay_protected</span><span class="s2">(msg_type: str) -&gt; bool:</span>
+    <span class="s2"># </span><span class="s7">Everything is protected in the clean build.</span>
+    <span class="s0">return </span><span class="s3">True</span>
+
+</pre>
+</body>
+</html>

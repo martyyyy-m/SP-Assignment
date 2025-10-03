@@ -1,0 +1,178 @@
+<html>
+<head>
+<title>run_node.py</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #cf8e6d;}
+.s1 { color: #bcbec4;}
+.s2 { color: #bcbec4;}
+.s3 { color: #7a7e85;}
+.s4 { color: #56a8f5;}
+.s5 { color: #c77dbb; font-style: italic;}
+.s6 { color: #6aab73;}
+.s7 { color: #2aacb8; font-style: italic;}
+.s8 { color: #f75464;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+run_node.py</font>
+</center></td></tr></table>
+<pre><span class="s0">import </span><span class="s1">argparse 
+</span><span class="s0">import </span><span class="s1">asyncio 
+</span><span class="s0">import </span><span class="s1">json 
+</span><span class="s0">from </span><span class="s1">pathlib </span><span class="s0">import </span><span class="s1">Path 
+</span><span class="s0">from </span><span class="s1">typing </span><span class="s0">import </span><span class="s1">Tuple 
+</span>
+<span class="s0">from </span><span class="s2">.</span><span class="s1">framing </span><span class="s0">import </span><span class="s1">write_frame</span><span class="s2">, </span><span class="s1">read_frame 
+</span><span class="s0">from </span><span class="s2">. </span><span class="s0">import </span><span class="s1">messages </span><span class="s0">as </span><span class="s1">m 
+</span><span class="s0">from </span><span class="s2">.</span><span class="s1">node </span><span class="s0">import </span><span class="s1">IntroducerServer</span><span class="s2">, </span><span class="s1">ClientNode 
+</span>
+<span class="s2"># </span><span class="s3">Same interface as the vulnerable build, but without admin/backdoor commands.</span>
+
+
+<span class="s0">async def </span><span class="s4">run_introducer</span><span class="s2">(host: str, port: int) -&gt; </span><span class="s5">None</span><span class="s2">:</span>
+    <span class="s1">server </span><span class="s2">= </span><span class="s1">IntroducerServer</span><span class="s2">(</span><span class="s1">host</span><span class="s2">, </span><span class="s1">port</span><span class="s2">)</span>
+    <span class="s0">await </span><span class="s1">server</span><span class="s2">.</span><span class="s1">start</span><span class="s2">()</span>
+
+
+<span class="s0">async def </span><span class="s4">run_client</span><span class="s2">(node_id: str, introducer: </span><span class="s1">Tuple</span><span class="s2">[str, int], listen: </span><span class="s1">Tuple</span><span class="s2">[str, int] | </span><span class="s5">None</span><span class="s2">) -&gt; </span><span class="s5">None</span><span class="s2">:</span>
+    <span class="s1">client </span><span class="s2">= </span><span class="s1">ClientNode</span><span class="s2">(</span><span class="s1">node_id</span><span class="s2">, </span><span class="s1">introducer</span><span class="s2">, </span><span class="s1">listen</span><span class="s2">)</span>
+    <span class="s0">await </span><span class="s1">client</span><span class="s2">.</span><span class="s1">start</span><span class="s2">()</span>
+    <span class="s2">print(</span><span class="s0">f</span><span class="s6">&quot;Client </span><span class="s5">{</span><span class="s1">node_id</span><span class="s5">} </span><span class="s6">connected to introducer </span><span class="s5">{</span><span class="s1">introducer</span><span class="s5">}</span><span class="s6">&quot;</span><span class="s2">)</span>
+    <span class="s0">while </span><span class="s5">True</span><span class="s2">:</span>
+        <span class="s1">frame </span><span class="s2">= </span><span class="s0">await </span><span class="s1">client</span><span class="s2">.</span><span class="s1">inbox</span><span class="s2">.</span><span class="s1">get</span><span class="s2">()</span>
+        <span class="s1">mt </span><span class="s2">= </span><span class="s1">frame</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(&quot;</span><span class="s6">msg_type</span><span class="s2">&quot;)</span>
+        <span class="s0">if </span><span class="s1">mt </span><span class="s2">in (</span><span class="s1">m</span><span class="s2">.</span><span class="s5">DIRECT_MSG</span><span class="s2">, </span><span class="s1">m</span><span class="s2">.</span><span class="s5">GROUP_MSG</span><span class="s2">):</span>
+            <span class="s2">print(</span><span class="s0">f</span><span class="s6">&quot;[</span><span class="s5">{</span><span class="s1">mt</span><span class="s5">}</span><span class="s6">] </span><span class="s5">{</span><span class="s1">frame</span><span class="s2">.</span><span class="s1">get</span><span class="s2">('</span><span class="s6">from</span><span class="s2">')</span><span class="s5">} </span><span class="s6">-&gt; </span><span class="s5">{</span><span class="s1">frame</span><span class="s2">.</span><span class="s1">get</span><span class="s2">('</span><span class="s6">to</span><span class="s2">') or </span><span class="s1">frame</span><span class="s2">.</span><span class="s1">get</span><span class="s2">('</span><span class="s6">group</span><span class="s2">')</span><span class="s5">}</span><span class="s6">: </span><span class="s5">{</span><span class="s1">frame</span><span class="s2">.</span><span class="s1">get</span><span class="s2">('</span><span class="s6">body</span><span class="s2">', {}).</span><span class="s1">get</span><span class="s2">('</span><span class="s6">content</span><span class="s2">')</span><span class="s5">}</span><span class="s6">&quot;</span><span class="s2">)</span>
+        <span class="s0">elif </span><span class="s1">mt </span><span class="s2">== </span><span class="s1">m</span><span class="s2">.</span><span class="s5">FILE_OFFER</span><span class="s2">:</span>
+            <span class="s1">b </span><span class="s2">= </span><span class="s1">frame</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(&quot;</span><span class="s6">body</span><span class="s2">&quot;, {})</span>
+            <span class="s2">print(</span><span class="s0">f</span><span class="s6">&quot;[FILE_OFFER] from </span><span class="s5">{</span><span class="s1">frame</span><span class="s2">.</span><span class="s1">get</span><span class="s2">('</span><span class="s6">from</span><span class="s2">')</span><span class="s5">} </span><span class="s6">name=</span><span class="s5">{</span><span class="s1">b</span><span class="s2">.</span><span class="s1">get</span><span class="s2">('</span><span class="s6">name</span><span class="s2">')</span><span class="s5">} </span><span class="s6">size=</span><span class="s5">{</span><span class="s1">b</span><span class="s2">.</span><span class="s1">get</span><span class="s2">('</span><span class="s6">size</span><span class="s2">')</span><span class="s5">}</span><span class="s6">&quot;</span><span class="s2">)</span>
+        <span class="s0">else</span><span class="s2">:</span>
+            <span class="s2">print(</span><span class="s1">json</span><span class="s2">.</span><span class="s1">dumps</span><span class="s2">(</span><span class="s1">frame</span><span class="s2">))</span>
+
+
+<span class="s0">async def </span><span class="s4">run_cli</span><span class="s2">(args: </span><span class="s1">argparse</span><span class="s2">.</span><span class="s1">Namespace</span><span class="s2">) -&gt; </span><span class="s5">None</span><span class="s2">:</span>
+    <span class="s1">host</span><span class="s2">, </span><span class="s1">port </span><span class="s2">= </span><span class="s1">args</span><span class="s2">.</span><span class="s1">introducer</span><span class="s2">.</span><span class="s1">split</span><span class="s2">(&quot;</span><span class="s6">:</span><span class="s2">&quot;)</span>
+    <span class="s1">reader</span><span class="s2">, </span><span class="s1">writer </span><span class="s2">= </span><span class="s0">await </span><span class="s1">asyncio</span><span class="s2">.</span><span class="s1">open_connection</span><span class="s2">(</span><span class="s1">host</span><span class="s2">, int(</span><span class="s1">port</span><span class="s2">))</span>
+    <span class="s1">hello </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">new_envelope</span><span class="s2">(</span><span class="s1">m</span><span class="s2">.</span><span class="s5">HELLO</span><span class="s2">, from_id=</span><span class="s1">args</span><span class="s2">.</span><span class="s1">ident </span><span class="s0">or </span><span class="s2">&quot;</span><span class="s6">cli</span><span class="s2">&quot;)</span>
+    <span class="s1">hello </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">sign</span><span class="s2">(</span><span class="s1">hello</span><span class="s2">)</span>
+    <span class="s0">await </span><span class="s1">write_frame</span><span class="s2">(</span><span class="s1">writer</span><span class="s2">, </span><span class="s1">hello</span><span class="s2">)</span>
+
+    <span class="s0">async def </span><span class="s4">read_once_until</span><span class="s2">(msg_type: str):</span>
+        <span class="s0">while </span><span class="s5">True</span><span class="s2">:</span>
+            <span class="s1">fr </span><span class="s2">= </span><span class="s0">await </span><span class="s1">read_frame</span><span class="s2">(</span><span class="s1">reader</span><span class="s2">)</span>
+            <span class="s0">if </span><span class="s1">fr</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(&quot;</span><span class="s6">msg_type</span><span class="s2">&quot;) == </span><span class="s1">msg_type </span><span class="s2">and </span><span class="s1">m</span><span class="s2">.</span><span class="s1">verify</span><span class="s2">(</span><span class="s1">fr</span><span class="s2">):</span>
+                <span class="s0">return </span><span class="s1">fr 
+</span>
+    <span class="s0">if </span><span class="s1">args</span><span class="s2">.</span><span class="s1">command </span><span class="s2">== &quot;</span><span class="s6">members</span><span class="s2">&quot;:</span>
+        <span class="s1">env </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">new_envelope</span><span class="s2">(</span><span class="s1">m</span><span class="s2">.</span><span class="s5">MEMBER_LIST_REQUEST</span><span class="s2">, from_id=</span><span class="s1">args</span><span class="s2">.</span><span class="s1">ident </span><span class="s0">or </span><span class="s2">&quot;</span><span class="s6">cli</span><span class="s2">&quot;)</span>
+        <span class="s1">env </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">sign</span><span class="s2">(</span><span class="s1">env</span><span class="s2">)</span>
+        <span class="s0">await </span><span class="s1">write_frame</span><span class="s2">(</span><span class="s1">writer</span><span class="s2">, </span><span class="s1">env</span><span class="s2">)</span>
+        <span class="s1">resp </span><span class="s2">= </span><span class="s0">await </span><span class="s1">read_once_until</span><span class="s2">(</span><span class="s1">m</span><span class="s2">.</span><span class="s5">MEMBER_LIST_RESPONSE</span><span class="s2">)</span>
+        <span class="s2">print(</span><span class="s1">json</span><span class="s2">.</span><span class="s1">dumps</span><span class="s2">(</span><span class="s1">resp</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(&quot;</span><span class="s6">body</span><span class="s2">&quot;, {}).</span><span class="s1">get</span><span class="s2">(&quot;</span><span class="s6">members</span><span class="s2">&quot;, {}), indent=</span><span class="s7">2</span><span class="s2">))</span>
+
+    <span class="s0">elif </span><span class="s1">args</span><span class="s2">.</span><span class="s1">command </span><span class="s2">== &quot;</span><span class="s6">send</span><span class="s2">&quot;:</span>
+        <span class="s1">env </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">new_envelope</span><span class="s2">(</span><span class="s1">m</span><span class="s2">.</span><span class="s5">DIRECT_MSG</span><span class="s2">, from_id=</span><span class="s1">args</span><span class="s2">.</span><span class="s1">from_id</span><span class="s2">, to_id=</span><span class="s1">args</span><span class="s2">.</span><span class="s1">to</span><span class="s2">)</span>
+        <span class="s1">env</span><span class="s2">[&quot;</span><span class="s6">body</span><span class="s2">&quot;] = {&quot;</span><span class="s6">content_type</span><span class="s2">&quot;: &quot;</span><span class="s6">text/plain</span><span class="s2">&quot;, &quot;</span><span class="s6">content</span><span class="s2">&quot;: </span><span class="s1">args</span><span class="s2">.</span><span class="s1">message</span><span class="s2">}</span>
+        <span class="s1">env </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">sign</span><span class="s2">(</span><span class="s1">env</span><span class="s2">)</span>
+        <span class="s0">await </span><span class="s1">write_frame</span><span class="s2">(</span><span class="s1">writer</span><span class="s2">, </span><span class="s1">env</span><span class="s2">)</span>
+
+    <span class="s0">elif </span><span class="s1">args</span><span class="s2">.</span><span class="s1">command </span><span class="s2">== &quot;</span><span class="s6">send-group</span><span class="s2">&quot;:</span>
+        <span class="s1">env </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">new_envelope</span><span class="s2">(</span><span class="s1">m</span><span class="s2">.</span><span class="s5">GROUP_MSG</span><span class="s2">, from_id=</span><span class="s1">args</span><span class="s2">.</span><span class="s1">from_id</span><span class="s2">, group=</span><span class="s1">args</span><span class="s2">.</span><span class="s1">group</span><span class="s2">)</span>
+        <span class="s1">env</span><span class="s2">[&quot;</span><span class="s6">body</span><span class="s2">&quot;] = {&quot;</span><span class="s6">content_type</span><span class="s2">&quot;: &quot;</span><span class="s6">text/plain</span><span class="s2">&quot;, &quot;</span><span class="s6">content</span><span class="s2">&quot;: </span><span class="s1">args</span><span class="s2">.</span><span class="s1">message</span><span class="s2">}</span>
+        <span class="s1">env </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">sign</span><span class="s2">(</span><span class="s1">env</span><span class="s2">)</span>
+        <span class="s0">await </span><span class="s1">write_frame</span><span class="s2">(</span><span class="s1">writer</span><span class="s2">, </span><span class="s1">env</span><span class="s2">)</span>
+
+    <span class="s0">elif </span><span class="s1">args</span><span class="s2">.</span><span class="s1">command </span><span class="s2">== &quot;</span><span class="s6">send-file</span><span class="s2">&quot;:</span>
+        <span class="s1">p </span><span class="s2">= </span><span class="s1">Path</span><span class="s2">(</span><span class="s1">args</span><span class="s2">.</span><span class="s1">path</span><span class="s2">)</span>
+        <span class="s1">size </span><span class="s2">= </span><span class="s1">p</span><span class="s2">.</span><span class="s1">stat</span><span class="s2">().</span><span class="s1">st_size</span>
+        <span class="s2"># </span><span class="s3">Clean build sends only the filename (no absolute path exposure)</span>
+        <span class="s1">offer </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">new_envelope</span><span class="s2">(</span><span class="s1">m</span><span class="s2">.</span><span class="s5">FILE_OFFER</span><span class="s2">, from_id=</span><span class="s1">args</span><span class="s2">.</span><span class="s1">from_id</span><span class="s2">, to_id=</span><span class="s1">args</span><span class="s2">.</span><span class="s1">to</span><span class="s2">)</span>
+        <span class="s1">offer</span><span class="s2">[&quot;</span><span class="s6">body</span><span class="s2">&quot;] = {&quot;</span><span class="s6">file_id</span><span class="s2">&quot;: </span><span class="s1">p</span><span class="s2">.</span><span class="s1">name</span><span class="s2">, &quot;</span><span class="s6">name</span><span class="s2">&quot;: </span><span class="s1">p</span><span class="s2">.</span><span class="s1">name</span><span class="s2">, &quot;</span><span class="s6">size</span><span class="s2">&quot;: </span><span class="s1">size</span><span class="s2">, &quot;</span><span class="s6">chunk_size</span><span class="s2">&quot;: </span><span class="s7">65536</span><span class="s2">, &quot;</span><span class="s6">transfer_mode</span><span class="s2">&quot;: &quot;</span><span class="s6">inline</span><span class="s2">&quot;}</span>
+        <span class="s1">offer </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">sign</span><span class="s2">(</span><span class="s1">offer</span><span class="s2">)</span>
+        <span class="s0">await </span><span class="s1">write_frame</span><span class="s2">(</span><span class="s1">writer</span><span class="s2">, </span><span class="s1">offer</span><span class="s2">)</span>
+
+        <span class="s1">chunk_size </span><span class="s2">= </span><span class="s7">65536</span>
+        <span class="s1">sent </span><span class="s2">= </span><span class="s7">0</span>
+        <span class="s0">with </span><span class="s1">p</span><span class="s2">.</span><span class="s1">open</span><span class="s2">(&quot;</span><span class="s6">rb</span><span class="s2">&quot;) </span><span class="s0">as </span><span class="s1">f</span><span class="s2">:</span>
+            <span class="s0">while </span><span class="s5">True</span><span class="s2">:</span>
+                <span class="s1">data </span><span class="s2">= </span><span class="s1">f</span><span class="s2">.</span><span class="s1">read</span><span class="s2">(</span><span class="s1">chunk_size</span><span class="s2">)</span>
+                <span class="s0">if </span><span class="s2">not </span><span class="s1">data</span><span class="s2">:</span>
+                    <span class="s0">break</span>
+                <span class="s1">chunk </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">new_envelope</span><span class="s2">(</span><span class="s1">m</span><span class="s2">.</span><span class="s5">FILE_CHUNK</span><span class="s2">, from_id=</span><span class="s1">args</span><span class="s2">.</span><span class="s1">from_id</span><span class="s2">, to_id=</span><span class="s1">args</span><span class="s2">.</span><span class="s1">to</span><span class="s2">)</span>
+                <span class="s1">chunk</span><span class="s2">[&quot;</span><span class="s6">body</span><span class="s2">&quot;] = {&quot;</span><span class="s6">file_id</span><span class="s2">&quot;: </span><span class="s1">p</span><span class="s2">.</span><span class="s1">name</span><span class="s2">, &quot;</span><span class="s6">offset</span><span class="s2">&quot;: </span><span class="s1">sent</span><span class="s2">, &quot;</span><span class="s6">data_b64</span><span class="s2">&quot;: </span><span class="s1">data</span><span class="s2">.</span><span class="s1">hex</span><span class="s2">()}</span>
+                <span class="s1">chunk </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">sign</span><span class="s2">(</span><span class="s1">chunk</span><span class="s2">)</span>
+                <span class="s0">await </span><span class="s1">write_frame</span><span class="s2">(</span><span class="s1">writer</span><span class="s2">, </span><span class="s1">chunk</span><span class="s2">)</span>
+                <span class="s1">sent </span><span class="s2">+= len(</span><span class="s1">data</span><span class="s2">)</span>
+        <span class="s1">done </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">new_envelope</span><span class="s2">(</span><span class="s1">m</span><span class="s2">.</span><span class="s5">FILE_COMPLETE</span><span class="s2">, from_id=</span><span class="s1">args</span><span class="s2">.</span><span class="s1">from_id</span><span class="s2">, to_id=</span><span class="s1">args</span><span class="s2">.</span><span class="s1">to</span><span class="s2">)</span>
+        <span class="s1">done</span><span class="s2">[&quot;</span><span class="s6">body</span><span class="s2">&quot;] = {&quot;</span><span class="s6">file_id</span><span class="s2">&quot;: </span><span class="s1">p</span><span class="s2">.</span><span class="s1">name</span><span class="s2">}</span>
+        <span class="s1">done </span><span class="s2">= </span><span class="s1">m</span><span class="s2">.</span><span class="s1">sign</span><span class="s2">(</span><span class="s1">done</span><span class="s2">)</span>
+        <span class="s0">await </span><span class="s1">write_frame</span><span class="s2">(</span><span class="s1">writer</span><span class="s2">, </span><span class="s1">done</span><span class="s2">)</span>
+
+    <span class="s1">writer</span><span class="s2">.</span><span class="s1">close</span><span class="s2">()</span>
+    <span class="s0">await </span><span class="s1">writer</span><span class="s2">.</span><span class="s1">wait_closed</span><span class="s2">()</span>
+
+
+<span class="s0">def </span><span class="s4">parse_args</span><span class="s2">() -&gt; </span><span class="s1">argparse</span><span class="s2">.</span><span class="s1">Namespace</span><span class="s2">:</span>
+    <span class="s1">p </span><span class="s2">= </span><span class="s1">argparse</span><span class="s2">.</span><span class="s1">ArgumentParser</span><span class="s2">()</span>
+    <span class="s1">p</span><span class="s2">.</span><span class="s1">add_argument</span><span class="s2">(&quot;</span><span class="s6">--mode</span><span class="s2">&quot;, choices=[&quot;</span><span class="s6">introducer</span><span class="s2">&quot;, &quot;</span><span class="s6">client</span><span class="s2">&quot;, &quot;</span><span class="s6">cli</span><span class="s2">&quot;], required=</span><span class="s5">True</span><span class="s2">)</span>
+    <span class="s1">p</span><span class="s2">.</span><span class="s1">add_argument</span><span class="s2">(&quot;</span><span class="s6">--host</span><span class="s2">&quot;)</span>
+    <span class="s1">p</span><span class="s2">.</span><span class="s1">add_argument</span><span class="s2">(&quot;</span><span class="s6">--port</span><span class="s2">&quot;, type=int)</span>
+    <span class="s1">p</span><span class="s2">.</span><span class="s1">add_argument</span><span class="s2">(&quot;</span><span class="s6">--id</span><span class="s2">&quot;, dest=&quot;</span><span class="s6">ident</span><span class="s2">&quot;)</span>
+    <span class="s1">p</span><span class="s2">.</span><span class="s1">add_argument</span><span class="s2">(&quot;</span><span class="s6">--introducer</span><span class="s2">&quot;)</span>
+    <span class="s1">p</span><span class="s2">.</span><span class="s1">add_argument</span><span class="s2">(&quot;</span><span class="s6">--listen</span><span class="s2">&quot;)</span>
+
+    <span class="s1">sub </span><span class="s2">= </span><span class="s1">p</span><span class="s2">.</span><span class="s1">add_subparsers</span><span class="s2">(dest=&quot;</span><span class="s6">command</span><span class="s2">&quot;)</span>
+    <span class="s1">sub</span><span class="s2">.</span><span class="s1">required </span><span class="s2">= </span><span class="s5">False</span>
+
+    <span class="s1">sub</span><span class="s2">.</span><span class="s1">add_parser</span><span class="s2">(&quot;</span><span class="s6">members</span><span class="s2">&quot;)</span>
+
+    <span class="s1">sp </span><span class="s2">= </span><span class="s1">sub</span><span class="s2">.</span><span class="s1">add_parser</span><span class="s2">(&quot;</span><span class="s6">send</span><span class="s2">&quot;)</span>
+    <span class="s1">sp</span><span class="s2">.</span><span class="s1">add_argument</span><span class="s2">(&quot;</span><span class="s6">--from</span><span class="s2">&quot;, dest=&quot;</span><span class="s6">from_id</span><span class="s2">&quot;, required=</span><span class="s5">True</span><span class="s2">)</span>
+    <span class="s1">sp</span><span class="s2">.</span><span class="s1">add_argument</span><span class="s2">(&quot;</span><span class="s6">--to</span><span class="s2">&quot;, required=</span><span class="s5">True</span><span class="s2">)</span>
+    <span class="s1">sp</span><span class="s2">.</span><span class="s1">add_argument</span><span class="s2">(&quot;</span><span class="s6">message</span><span class="s2">&quot;, nargs=</span><span class="s1">argparse</span><span class="s2">.</span><span class="s5">REMAINDER</span><span class="s2">)</span>
+
+    <span class="s1">sp </span><span class="s2">= </span><span class="s1">sub</span><span class="s2">.</span><span class="s1">add_parser</span><span class="s2">(&quot;</span><span class="s6">send-group</span><span class="s2">&quot;)</span>
+    <span class="s1">sp</span><span class="s2">.</span><span class="s1">add_argument</span><span class="s2">(&quot;</span><span class="s6">--from</span><span class="s2">&quot;, dest=&quot;</span><span class="s6">from_id</span><span class="s2">&quot;, required=</span><span class="s5">True</span><span class="s2">)</span>
+    <span class="s1">sp</span><span class="s2">.</span><span class="s1">add_argument</span><span class="s2">(&quot;</span><span class="s6">--group</span><span class="s2">&quot;, required=</span><span class="s5">True</span><span class="s2">)</span>
+    <span class="s1">sp</span><span class="s2">.</span><span class="s1">add_argument</span><span class="s2">(&quot;</span><span class="s6">message</span><span class="s2">&quot;, nargs=</span><span class="s1">argparse</span><span class="s2">.</span><span class="s5">REMAINDER</span><span class="s2">)</span>
+
+    <span class="s1">sp </span><span class="s2">= </span><span class="s1">sub</span><span class="s2">.</span><span class="s1">add_parser</span><span class="s2">(&quot;</span><span class="s6">send-file</span><span class="s2">&quot;)</span>
+    <span class="s1">sp</span><span class="s2">.</span><span class="s1">add_argument</span><span class="s2">(&quot;</span><span class="s6">--from</span><span class="s2">&quot;, dest=&quot;</span><span class="s6">from_id</span><span class="s2">&quot;, required=</span><span class="s5">True</span><span class="s2">)</span>
+    <span class="s1">sp</span><span class="s2">.</span><span class="s1">add_argument</span><span class="s2">(&quot;</span><span class="s6">--to</span><span class="s2">&quot;, required=</span><span class="s5">True</span><span class="s2">)</span>
+    <span class="s1">sp</span><span class="s2">.</span><span class="s1">add_argument</span><span class="s2">(&quot;</span><span class="s6">--path</span><span class="s2">&quot;, required=</span><span class="s5">True</span><span class="s2">)</span>
+
+    <span class="s0">return </span><span class="s1">p</span><span class="s2">.</span><span class="s1">parse_args</span><span class="s2">()</span>
+
+
+<span class="s0">def </span><span class="s4">main</span><span class="s2">() -&gt; </span><span class="s5">None</span><span class="s2">:</span>
+    <span class="s1">args </span><span class="s2">= </span><span class="s1">parse_args</span><span class="s2">()</span>
+    <span class="s0">if </span><span class="s1">args</span><span class="s2">.</span><span class="s1">mode </span><span class="s2">== &quot;</span><span class="s6">introducer</span><span class="s2">&quot;:</span>
+        <span class="s1">host </span><span class="s2">= </span><span class="s1">args</span><span class="s2">.</span><span class="s1">host </span><span class="s2">or &quot;</span><span class="s6">127.0.0.1</span><span class="s2">&quot;</span>
+        <span class="s1">port </span><span class="s2">= </span><span class="s1">args</span><span class="s2">.</span><span class="s1">port </span><span class="s2">or </span><span class="s7">9000</span>
+        <span class="s1">asyncio</span><span class="s2">.</span><span class="s1">run</span><span class="s2">(</span><span class="s1">run_introducer</span><span class="s2">(</span><span class="s1">host</span><span class="s2">, </span><span class="s1">port</span><span class="s2">))</span>
+    <span class="s0">elif </span><span class="s1">args</span><span class="s2">.</span><span class="s1">mode </span><span class="s2">== &quot;</span><span class="s6">client</span><span class="s2">&quot;:</span>
+        <span class="s0">if </span><span class="s2">not </span><span class="s1">args</span><span class="s2">.</span><span class="s1">ident </span><span class="s2">or not </span><span class="s1">args</span><span class="s2">.</span><span class="s1">introducer</span><span class="s2">&quot;</span><span class="s6">:</span>
+            <span class="s0">raise </span><span class="s2">SystemExit(&quot;</span><span class="s6">--id and --introducer are required for client mode</span><span class="s2">&quot;)</span>
+        <span class="s1">ih</span><span class="s2">, </span><span class="s1">ip </span><span class="s2">= </span><span class="s1">args</span><span class="s2">.</span><span class="s1">introducer</span><span class="s2">.</span><span class="s1">split</span><span class="s2">(&quot;</span><span class="s6">:</span><span class="s2">&quot;)</span>
+        <span class="s1">listen </span><span class="s2">= </span><span class="s5">None</span>
+        <span class="s0">if </span><span class="s1">args</span><span class="s2">.</span><span class="s1">listen</span><span class="s2">:</span>
+            <span class="s1">lh</span><span class="s2">, </span><span class="s1">lp </span><span class="s2">= </span><span class="s1">args</span><span class="s2">.</span><span class="s1">listen</span><span class="s2">.</span><span class="s1">split</span><span class="s2">(&quot;</span><span class="s6">:</span><span class="s2">&quot;)</span>
+            <span class="s1">listen </span><span class="s2">= (</span><span class="s1">lh</span><span class="s2">, int(</span><span class="s1">lp</span><span class="s2">))</span>
+        <span class="s1">asyncio</span><span class="s2">.</span><span class="s1">run</span><span class="s2">(</span><span class="s1">run_client</span><span class="s2">(</span><span class="s1">args</span><span class="s2">.</span><span class="s1">ident</span><span class="s2">, (</span><span class="s1">ih</span><span class="s2">, int(</span><span class="s1">ip</span><span class="s2">)), </span><span class="s1">listen</span><span class="s2">))</span>
+    <span class="s0">elif </span><span class="s1">args</span><span class="s2">.</span><span class="s1">mode </span><span class="s2">== &quot;</span><span class="s6">cli</span><span class="s2">&quot;:</span>
+        <span class="s0">if </span><span class="s2">not </span><span class="s1">args</span><span class="s2">.</span><span class="s1">introducer</span><span class="s2">:</span>
+            <span class="s0">raise </span><span class="s2">SystemExit(&quot;</span><span class="s6">--introducer required for cli mode</span><span class="s2">&quot;)</span>
+        <span class="s0">if </span><span class="s1">args</span><span class="s2">.</span><span class="s1">command </span><span class="s2">in (&quot;</span><span class="s6">send</span><span class="s2">&quot;, &quot;</span><span class="s6">send-group</span><span class="s2">&quot;):</span>
+            <span class="s1">args</span><span class="s2">.</span><span class="s1">message </span><span class="s2">= &quot; &quot;.</span><span class="s1">join</span><span class="s2">(</span><span class="s1">args</span><span class="s2">.</span><span class="s1">message </span><span class="s0">or </span><span class="s2">[])</span>
+        <span class="s1">asyncio</span><span class="s2">.</span><span class="s1">run</span><span class="s2">(</span><span class="s1">run_cli</span><span class="s2">(</span><span class="s1">args</span><span class="s2">))</span>
+
+<span class="s0">if </span><span class="s1">__name__ </span><span class="s2">== &quot;</span><span class="s6">__main__</span><span class="s2">&quot;:</span>
+    <span class="s1">main</span><span class="s2">()</span>
+
+</pre>
+</body>
+</html>
