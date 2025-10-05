@@ -145,7 +145,13 @@ class IntroducerServer:
             return
 
         if msg_type == m.MEMBER_LIST_REQUEST:
-            listing = self.presence.list_members()
+            listing = {}
+            for uid, info in self.presence.list_members().items():
+                entry = dict(info)  # copy last_seen, status, addr
+                if uid in self.pubkeys:
+                    entry["pubkey"] = crypto.export_pubkey_b64url(self.pubkeys[uid])
+                listing[uid] = entry
+
             resp = m.new_envelope(m.MEMBER_LIST_RESPONSE, from_id="introducer")
             resp["body"] = {"members": listing}
             resp = m.sign_envelope(resp, self.self_privkey)
