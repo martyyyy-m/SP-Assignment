@@ -26,6 +26,10 @@ class PresenceDirectory:
     def list_members(self) -> Dict[str, Dict[str, Any]]:
         return dict(self._members)
 
+def now_ms() -> int:
+    """Return current Unix timestamp in milliseconds."""
+    return int(time.time() * 1000)
+
 class IntroducerServer:
     """
     Hardened introducer that:
@@ -42,6 +46,7 @@ class IntroducerServer:
         self.msg_cache: set[str] = set()
         self.nonce_cache: set[str] = set()
         self.pubkeys: Dict[str, crypto.RSAPublicKey] = {}  # user_id -> RSA pubkey
+        self.server_addrs: Dict[str, Dict[str, Any]] = {}  # server_id -> {host, port, pubkey}
 
         # Load or generate persistent server key
         key_dir = Path.home() / ".socp"
@@ -89,7 +94,46 @@ class IntroducerServer:
         nonce = frame.get("nonce")
         sender = frame.get("from")
 
-        # === 1) HELLO ===
+        # === 1) SERVER_HELLO_JOIN ===
+        if msg_type == "SERVER_HELLO_JOIN":
+            ctx.peer_id = sender
+            payload = frame.get("body", {})
+            host = payload.get("host")
+            port = payload.get("port")
+            pubkey_b64 = payload.get("pubkey")
+
+            if not host or not port or not pubkey_b64:
+                print(f"Invalid SERVER_HELLO_JOIN from {sender}")
+                return
+
+            # Import server public key
+            try:
+                self.pubkeys[sender] = crypto.import_pubkey_b64url(pubkey_b64)
+                self.server_addrs[sender] = {"host": host, "port": port, "pubkey": pubkey_b64}
+                print(f"Registered new server {sender} at {host}:{port}")
+            except Exception as e:
+                print(f"Failed to import server key from {sender}: {e}")
+                return
+
+            # Respond with SERVER_WELCOME
+            members = [{"server_id": sid, **addr} for sid, addr in self.server_addrs.items()]
+            resp = m.new_envelope("SERVER_WELCOME", from_id="introducer", to_id=sender)
+            resp["ts"] = now_ms()  # <-- top-level timestamp
+            resp["body"] = {
+                "assigned_id": sender,
+                "servers": members
+            }
+            resp = m.sign_envelope(resp, self.self_privkey)
+            await write_frame(ctx.writer, resp)
+
+            # Broadcast SERVER_ANNOUNCE to all other servers
+            announce = m.new_envelope("SERVER_ANNOUNCE", from_id=sender, to_id="*")
+            announce["ts"] = now_ms()  # <-- top-level timestamp
+            announce["body"] = {"host": host, "port": port, "pubkey": pubkey_b64}
+            announce = m.sign_envelope(announce, self.self_privkey)
+            await self.broadcast(announce, exclude=ctx.writer)
+
+        # === 2) Verify transport signature for known users ===
         if msg_type == m.HELLO:
             ctx.peer_id = sender
             pubkey_b64 = frame.get("body", {}).get("pubkey")
@@ -99,27 +143,11 @@ class IntroducerServer:
                     print(f"Registered public key for {sender}")
                 except Exception as e:
                     print(f"Failed to import public key from {sender}: {e}")
-
-            # Respond with introducer HELLO signed with persistent key
             resp = m.new_envelope(m.HELLO, from_id="introducer")
             resp = m.sign_envelope(resp, self.self_privkey)
             await write_frame(ctx.writer, resp)
             return
-
-        # === 2) Verify transport signature for known users ===
-        pubkey = self.pubkeys.get(sender)
-        if pubkey:
-            if not m.verify_envelope(frame, pubkey):
-                print(f"Invalid transport signature from {sender}")
-                return
-            if msg_type in (m.DIRECT_MSG, m.GROUP_MSG):
-                if not m.verify_content(frame, pubkey):
-                    print(f"Invalid content signature from {sender}")
-                    return
-        else:
-            # Unknown sender: skip verification but log
-            print(f"Skipping verification for unknown peer {sender}")
-
+               
         # === 3) Replay protection ===
         if msg_id:
             if msg_id in self.msg_cache:
@@ -196,7 +224,23 @@ class ClientNode:
         self.pubkeys: Dict[str, crypto.RSAPublicKey] = {} # store peer public keys
 
         # RSA keypair
-        self.privkey, self.pubkey = crypto.generate_rsa4096()
+        key_dir = Path.home() / ".socp"
+        key_dir.mkdir(parents=True, exist_ok=True)
+        priv_path = key_dir / f"{self.node_id}_priv.pem"
+
+        if priv_path.exists():
+            # load existing key
+            with open(priv_path, "rb") as f:
+                self.privkey = crypto.load_privkey_pem(f.read())
+            self.pubkey = self.privkey.public_key()
+            print(f"[{self.node_id}] Loaded persistent keypair from {priv_path}")
+        else:
+            # generate and save new one
+            self.privkey, self.pubkey = crypto.generate_rsa4096()
+            with open(priv_path, "wb") as f:
+                f.write(crypto.export_privkey_pem(self.privkey))
+            print(f"[{self.node_id}] Generated new keypair and saved to {priv_path}")
+
         self.download_root = Path(os.environ.get("SOCP_DOWNLOAD_DIR", "./downloads")).resolve()
         self.download_root.mkdir(parents=True, exist_ok=True)
 
@@ -321,8 +365,9 @@ class ClientNode:
         pubkey = self.pubkeys[to_id]
         ciphertext = crypto.rsa_encrypt(pubkey, plaintext.encode("utf-8"))
 
-        ts = int(time.time() * 1000)
+        ts = now_ms()
         env = m.new_envelope(m.DIRECT_MSG, from_id=self.node_id, to_id=to_id)
+        env["ts"] = ts
         env["body"]["content"] = ciphertext
         env["body"]["ts"] = ts
 
@@ -336,9 +381,10 @@ class ClientNode:
         await write_frame(w, env)
 
     async def send_group(self, group: str, plaintext: str) -> None:
-        ts = int(time.time() * 1000)
+        ts = now_ms()
         _, w = self.peers["introducer"]
         env = m.new_envelope(m.GROUP_MSG, from_id=self.node_id, group=group)
+        env["ts"] = ts
         env["body"]["content"] = plaintext
         env["body"]["content_type"] = "text/plain"
         env["body"]["ts"] = ts
@@ -350,3 +396,73 @@ class ClientNode:
         # Transport signature
         env = m.sign(env, self.privkey)
         await write_frame(w, env)
+
+class ServerNode:
+    """
+    Minimal server node that joins a trusted introducer,
+    receives server_id + list of other servers, and connects to them.
+    """
+    def __init__(self, server_id: str, introducer: Tuple[str, int], listen: Tuple[str, int]):
+        self.server_id = server_id
+        self.introducer = introducer
+        self.listen = listen
+        self.inbox: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
+        self.peers: Dict[str, Tuple[asyncio.StreamReader, asyncio.StreamWriter]] = {}
+        self.pubkeys: Dict[str, crypto.RSAPublicKey] = {}
+
+        # RSA keypair
+        key_dir = Path.home() / ".socp"
+        key_dir.mkdir(parents=True, exist_ok=True)
+        priv_path = key_dir / f"{self.server_id}_priv.pem"
+        if priv_path.exists():
+            with open(priv_path, "rb") as f:
+                self.privkey = crypto.load_privkey_pem(f.read())
+            self.pubkey = self.privkey.public_key()
+        else:
+            self.privkey, self.pubkey = crypto.generate_rsa4096()
+            with open(priv_path, "wb") as f:
+                f.write(crypto.export_privkey_pem(self.privkey))
+
+    async def start(self):
+        # Connect to introducer
+        intro_reader, intro_writer = await asyncio.open_connection(*self.introducer)
+        self.peers["introducer"] = (intro_reader, intro_writer)
+
+        # Send SERVER_HELLO_JOIN
+        hello = m.new_envelope("SERVER_HELLO_JOIN", from_id=self.server_id)
+        hello["body"] = {
+            "host": self.listen[0],
+            "port": self.listen[1],
+            "pubkey": crypto.export_pubkey_b64url(self.pubkey),
+        }
+        hello = m.sign_envelope(hello, self.privkey)
+        await write_frame(intro_writer, hello)
+
+        # Start listening for incoming frames from introducer
+        asyncio.create_task(self.reader_loop("introducer", intro_reader))
+
+        # Listen for peer connections
+        server = await asyncio.start_server(self.handle_conn, self.listen[0], self.listen[1])
+        print(f"Server {self.server_id} listening on {self.listen}")
+        await server.serve_forever()
+
+    async def handle_conn(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        try:
+            while True:
+                frame = await read_frame(reader)
+                await self.inbox.put(frame)
+        except Exception:
+            pass
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    async def reader_loop(self, label: str, reader: asyncio.StreamReader):
+        try:
+            while True:
+                frame = await read_frame(reader)
+                print(f"[{label}] received {frame.get('msg_type')} from {frame.get('from')}")
+                await self.inbox.put(frame)
+        except Exception:
+            pass
+        

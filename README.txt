@@ -46,10 +46,16 @@ Quick Start
    python3 -m socp.run_node --mode cli --introducer 127.0.0.1:9000 members
 
 7) Send a direct message
-   python3 -m socp.run_node --mode cli --introducer 127.0.0.1:9000 send --from alice --to bob --to pubkey 'Hello Bob!'
+   python3 -m socp.run_node --mode cli \
+  --introducer 127.0.0.1:9000 \
+  send \
+  --from alice \
+  --to bob \
+  --to_pubkey "<pubkey>" \
+  'Hello Bob'
 
 8) Send a group message (group is a free-form label)
-   python -m socp.run_node --mode cli --introducer 127.0.0.1:9000 send-group --from alice --group cohort "Hello everyone"
+   python3 -m socp.run_node --mode cli --introducer 127.0.0.1:9000 send-group --from alice --group cohort "Hello everyone"
 
 9) File transfer (inline chunks over introducer)
    python -m socp.run_node --mode cli --introducer 127.0.0.1:9000 send-file --from alice --to bob --path README.txt

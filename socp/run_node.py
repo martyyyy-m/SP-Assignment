@@ -7,7 +7,7 @@ from typing import Tuple
 
 from .framing import write_frame, read_frame
 from . import messages as m
-from .node import IntroducerServer, ClientNode
+from .node import IntroducerServer, ClientNode, ServerNode
 from . import crypto
 from cryptography.hazmat.primitives import serialization
 
@@ -33,7 +33,6 @@ async def run_client(node_id: str, introducer: Tuple[str, int], listen: Tuple[st
             print(f"[FILE_OFFER] from {frame.get('from')} name={b.get('name')} size={b.get('size')}")
         else:
             print(json.dumps(frame))
-
 
 async def run_cli(args: argparse.Namespace) -> None:
     priv_path = os.environ.get("SOCP_PRIVKEY_PATH")
@@ -118,10 +117,13 @@ async def run_cli(args: argparse.Namespace) -> None:
     writer.close()
     await writer.wait_closed()
 
+async def run_server(server_id: str, introducer: Tuple[str, int], listen: Tuple[str, int]):
+    server = ServerNode(server_id, introducer, listen)
+    await server.start()
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
-    p.add_argument("--mode", choices=["introducer", "client", "cli"], required=True)
+    p.add_argument("--mode", choices=["introducer", "client", "cli", "server"], required=True)
     p.add_argument("--host")
     p.add_argument("--port", type=int)
     p.add_argument("--id", dest="ident")
@@ -177,6 +179,12 @@ def main() -> None:
         if args.command in ("send", "send-group"):
             args.message = " ".join(args.message or [])
         asyncio.run(run_cli(args))
+    elif args.mode == "server":
+        if not args.ident or not args.introducer or not args.listen:
+            raise SystemExit("--id, --introducer, and --listen are required for server mode")
+        ih, ip = args.introducer.split(":")
+        lh, lp = args.listen.split(":")
+        asyncio.run(run_server(args.ident, (ih, int(ip)), (lh, int(lp))))
 
 if __name__ == "__main__":
     main()
