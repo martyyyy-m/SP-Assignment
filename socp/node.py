@@ -137,15 +137,48 @@ class IntroducerServer:
         if msg_type == m.HELLO:
             ctx.peer_id = sender
             pubkey_b64 = frame.get("body", {}).get("pubkey")
+
+            # Duplicate user check
+            if sender in self.pubkeys:
+                # Send NAME_IN_USE error
+                resp = m.new_envelope("ERROR", from_id="introducer", to_id=sender)
+                resp["body"] = {"error": "NAME_IN_USE"}
+                resp = m.sign_envelope(resp, self.self_privkey)
+                await write_frame(ctx.writer, resp)
+                print(f"Rejected duplicate USER_HELLO for {sender}")
+                return
+
+            # Register new user
             if pubkey_b64:
                 try:
                     self.pubkeys[sender] = crypto.import_pubkey_b64url(pubkey_b64)
-                    print(f"Registered public key for {sender}")
+                    print(f"Registered new user {sender}")
                 except Exception as e:
-                    print(f"Failed to import public key from {sender}: {e}")
-            resp = m.new_envelope(m.HELLO, from_id="introducer")
+                    print(f"Failed to import user key from {sender}: {e}")
+                    return
+
+            # Track presence locally
+            self.presence.update(sender, {
+                "last_seen": frame.get("timestamp_ms"),
+                "status": "online",
+                "addr": str(ctx.writer.get_extra_info("peername")),
+            })
+
+            # Send back HELLO as acknowledgment
+            resp = m.new_envelope(m.HELLO, from_id="introducer", to_id=sender)
             resp = m.sign_envelope(resp, self.self_privkey)
             await write_frame(ctx.writer, resp)
+
+            # === Broadcast USER_ADVERTISE to other servers ===
+            advertise = m.new_envelope("USER_ADVERTISE", from_id=sender, to_id="*")
+            advertise["body"] = {
+                "user_id": sender,
+                "pubkey": pubkey_b64,
+                "status": "online",
+            }
+            advertise = m.sign_envelope(advertise, self.self_privkey)
+            await self.broadcast(advertise, exclude=ctx.writer)
+
             return
                
         # === 3) Replay protection ===
