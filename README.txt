@@ -35,24 +35,22 @@ Quick Start
 4) Start an introducer/relay node (acts as directory + router)
    python3 -m socp.run_node --mode introducer --host 127.0.0.1 --port 9000
 
+5) Start a server
+  # Terminal 1
+  python3 -m socp.run_node --mode server --id server_1 --introducer 127.0.0.1:9000 --listen 127.0.0.1:9201
+
 5) Start two client nodes and connect them to the introducer (use two new terminals)
-   # Terminal 1
+   # Terminal 2
    python3 -m socp.run_node --mode client --id alice --introducer 127.0.0.1:9000 --listen 127.0.0.1:9101
 
-   # Terminal 2
+   # Terminal 3
    python3 -m socp.run_node --mode client --id bob --introducer 127.0.0.1:9000 --listen 127.0.0.1:9102
 
 6) Verify: list members (can be done from any extra terminal)
    python3 -m socp.run_node --mode cli --introducer 127.0.0.1:9000 members
 
 7) Send a direct message
-   python3 -m socp.run_node --mode cli \
-  --introducer 127.0.0.1:9000 \
-  send \
-  --from alice \
-  --to bob \
-  --to_pubkey "<pubkey>" \
-  'Hello Bob'
+   python3 -m socp.run_node --mode cli --introducer 127.0.0.1:9000 send --from alice --to bob "Hello Bob"
 
 8) Send a group message (group is a free-form label)
    python3 -m socp.run_node --mode cli --introducer 127.0.0.1:9000 send-group --from alice --group cohort "Hello everyone"
