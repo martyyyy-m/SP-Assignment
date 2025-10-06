@@ -20,7 +20,7 @@ Security Model (Prototype)
 - Authentication: none by default; messages carry claimed identities. This is sufficient for interop prototyping and lab use. In a production-leaning build, wrap connections in TLS and add signed tokens.
 - Basic replay/loop defenses: message ID cache for most types, TTL decrement on forward.
 
-Intentional Vulnerabilities (Week 9 requirement)
+Intentional Vulnerabilities
 1) Presence replay gap (intentional): PRESENCE_UPDATE messages are not checked against the message ID replay cache. A forged PRESENCE_UPDATE can spoof a user’s status.
 2) Hidden operator override (intentional): If environment variable SOCP_OPERATOR_CODE is set, the node accepts ADMIN_OP messages carrying a matching operator_code. These messages allow setting the `from` identity of subsequent relayed DIRECT_MSG/GROUP_MSG on this connection. This is confined to the application session and does not access the host OS.
 
@@ -65,27 +65,6 @@ Quick Start
 9) File transfer (inline chunks over introducer)
    python -m socp.run_node --mode cli --introducer 127.0.0.1:9000 send-file --from alice --to bob --path README.txt
 
-Vulnerability Demonstrations
-A) Hidden operator override (identity forgery on a connection)
-   - Open a new terminal and start a dedicated introducer with an operator code on port 9001:
-     Windows PowerShell:
-       $env:SOCP_OPERATOR_CODE = "let-me-in"
-       python -m socp.run_node --mode introducer --host 127.0.0.1 --port 9001
-   - In two more terminals, connect clients to port 9001:
-       python -m socp.run_node --mode client --id alice --introducer 127.0.0.1:9001 --listen 127.0.0.1:9111
-       python -m socp.run_node --mode client --id bob   --introducer 127.0.0.1:9001 --listen 127.0.0.1:9112
-   - From a fourth terminal, trigger the override on your CLI connection:
-       python -m socp.run_node --mode cli --introducer 127.0.0.1:9001 admin-op --operator-code let-me-in --assume-from charlie
-   - Then send a message. Recipients should see it as from "charlie":
-       python -m socp.run_node --mode cli --introducer 127.0.0.1:9001 send --from alice --to bob "This should look like it's from charlie"
-
-B) Presence replay spoof (accepts forged presence)
-   - Create a JSON file presence_spoof.json with content like:
-     {"version":"1.0","msg_type":"PRESENCE_UPDATE","msg_id":"11111111-1111-1111-1111-111111111111","timestamp_ms":1759000000000,"from":"mallory","to":null,"group":null,"ttl":8,"body":{"status":"online"}}
-   - Send the raw frame to the introducer (no replay check on PRESENCE_UPDATE by design):
-     python -m socp.run_node --mode cli --introducer 127.0.0.1:9000 raw --json presence_spoof.json
-   - Verify with members listing that "mallory" appears:
-     python -m socp.run_node --mode cli --introducer 127.0.0.1:9000 members
 
 CLI Usage
 - Introducer/Relay:
