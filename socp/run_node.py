@@ -12,21 +12,39 @@ from .node import IntroducerServer, ClientNode, ServerNode
 from . import crypto
 from cryptography.hazmat.primitives import serialization
 
-# Same interface as the vulnerable build, but without admin/backdoor commands.
+"""
+run.py — one entry point for everything:
+- Introducer    (meet-me server that tracks presence and relays frames)
+- Client        (endpoints that talk via the introducer)
+- CLI helper    (quick one-shot commands like listing members, send a DM)
+- Server node   (peer servers that the introducer can announce)
 
+"""
+
+
+# -------------------------
+# Top-level process runners
+# -------------------------
 
 async def run_introducer(host: str, port: int) -> None:
+    """Spin up the introducer and serve forever."""
     server = IntroducerServer(host, port)
     await server.start()
 
 
 async def run_client(node_id: str, introducer: Tuple[str, int], listen: Tuple[str, int] | None) -> None:
-    # Create client node
+    """
+    Start a client node, connect to the introducer, and print any messages
+    we receive (DMs, group messages, file offers, etc.).
+
+    This is the “long-running” client: it keeps an inbox and shows events.
+    """
+    # Create client node and connect
     client = ClientNode(node_id, introducer, listen)
     await client.start()
     print(f"Client {node_id} connected to introducer {introducer}")
 
-    # Load private key for decrypting messages
+    # Load our private key for decrypting incoming DMs
     priv_path = Path.home() / ".socp" / f"{node_id}_priv.pem"
     if not priv_path.exists():
         raise SystemExit(f"Private key for {node_id} not found at {priv_path}")
@@ -35,11 +53,13 @@ async def run_client(node_id: str, introducer: Tuple[str, int], listen: Tuple[st
         priv_pem = f.read()
     my_privkey = serialization.load_pem_private_key(priv_pem, password=None)
 
+    # Event loop: pull frames from the client's inbox and handle a few types
     while True:
         frame = await client.inbox.get()
         mt = frame.get("msg_type")
 
         if mt == m.DIRECT_MSG:
+            # DMs are: ciphertext + sender’s pubkey + content_sig
             payload = frame.get("body", {}).get("payload")
             if payload:
                 ciphertext_b64 = payload.get("ciphertext")
@@ -54,7 +74,7 @@ async def run_client(node_id: str, introducer: Tuple[str, int], listen: Tuple[st
 
                 sender_pub = crypto.import_pubkey_b64url(sender_pub_b64)
 
-                # Verify content signature
+                # Verify “what was actually said” (canonical digest) before decrypting
                 valid = crypto.verify(
                     sender_pub,
                     crypto.canonical_dm_content(ciphertext_b64, sender, node_id, ts),
@@ -65,7 +85,7 @@ async def run_client(node_id: str, introducer: Tuple[str, int], listen: Tuple[st
                     print(f"[DIRECT_MSG] {sender} -> {node_id}: <invalid content signature>")
                     continue
 
-                # Decrypt ciphertext
+                # Decrypt after the signature checks out
                 try:
                     plaintext = crypto.rsa_decrypt(my_privkey, ciphertext_b64)
                     print(f"[DIRECT_MSG] {sender} -> {node_id}: {plaintext.decode('utf-8')}")
@@ -73,19 +93,35 @@ async def run_client(node_id: str, introducer: Tuple[str, int], listen: Tuple[st
                     print(f"[DIRECT_MSG] {sender} -> {node_id}: <failed to decrypt: {e}>")
 
         elif mt == m.GROUP_MSG:
+            # Group messages are signed cleartext (no encryption)
             sender = frame.get("from")
             group = frame.get("group")
             content = frame.get("body", {}).get("content")
             print(f"[GROUP_MSG] {sender} -> {group}: {content}")
 
         elif mt == m.FILE_OFFER:
+            # Basic announcement that a peer wants to send a file
             b = frame.get("body", {})
             print(f"[FILE_OFFER] from {frame.get('from')} name={b.get('name')} size={b.get('size')}")
 
         else:
+            # Fallback: just dump the whole frame for visibility
             print(json.dumps(frame))
 
+
+# -------------------------
+# CLI (one-shot) operations
+# -------------------------
+
 async def run_cli(args: argparse.Namespace) -> None:
+    """
+    Minimal CLI client for quick testing:
+      - 'members'     → list users known by the introducer
+      - 'send'        → DM a user (RSA-encrypted + content signature)
+      - 'send-group'  → post a signed message to a group
+      - 'send-file'   → naive inline file transfer (hex-encoded chunks)
+    """
+    # Where to load our private key from. Defaults to ~/.socp/<ident>_priv.pem
     priv_path = os.environ.get("SOCP_PRIVKEY_PATH")
     if not priv_path:
         ident = args.ident or "cli"
@@ -97,24 +133,28 @@ async def run_cli(args: argparse.Namespace) -> None:
     with open(priv_path, "rb") as f:
         priv_pem = f.read()
 
+    # Re-import the private key (unencrypted PEM)
     from cryptography.hazmat.primitives import serialization
     my_privkey = serialization.load_pem_private_key(priv_pem, password=None)
 
+    # Open a plain TCP connection to the introducer
     host, port = args.introducer.split(":")
     reader, writer = await asyncio.open_connection(host, int(port))
 
-    # Send HELLO
+    # Say HELLO first so the introducer knows who we are
     hello = m.new_envelope(m.HELLO, from_id=args.ident or "cli")
-    hello = m.sign(hello, my_privkey)
+    hello = m.sign(hello, my_privkey)  # content + transport (content is empty here)
     await write_frame(writer, hello)
 
     async def read_once_until(msg_type: str):
+        """Block until a specific message type arrives, then return that frame."""
         while True:
             fr = await read_frame(reader)
             if fr.get("msg_type") == msg_type:
                 return fr
 
     if args.command == "members":
+        # Ask the introducer for its present view of members (with pubkeys)
         env = m.new_envelope(m.MEMBER_LIST_REQUEST, from_id=args.ident or "cli")
         env = m.sign(env, my_privkey)
         await write_frame(writer, env)
@@ -122,62 +162,60 @@ async def run_cli(args: argparse.Namespace) -> None:
         print(json.dumps(resp.get("body", {}).get("members", {}), indent=2))
 
     elif args.command == "send":
-        # Fetch member list from introducer
+        # 1) Fetch member list so we can grab the recipient’s pubkey
         req = m.new_envelope(m.MEMBER_LIST_REQUEST, from_id=args.from_id)
         req = m.sign(req, my_privkey)
         await write_frame(writer, req)
 
-        # Wait for member list response
         resp = await read_once_until(m.MEMBER_LIST_RESPONSE)
         members = resp.get("body", {}).get("members", {})
 
         if args.to not in members:
             raise SystemExit(f"Recipient {args.to} not found in introducer member list")
 
-        # Recipient's public key
+        # 2) Recipient’s public key (PEM→Base64url in our protocol)
         to_pub_b64 = members[args.to]["pubkey"]
         to_pub = crypto.import_pubkey_b64url(to_pub_b64)
 
-        # Encrypt the plaintext
+        # 3) Encrypt a small plaintext with RSA-OAEP
         plaintext = " ".join(args.message).encode("utf-8")
         ciphertext_b64 = crypto.rsa_encrypt(to_pub, plaintext)
 
-        # Sender's public key
+        # 4) Sender’s public key (goes in payload so the receiver can verify)
         sender_pub_b64 = crypto.export_pubkey_b64url(my_privkey.public_key())
 
-        # Compute content signature (over ciphertext || from || to || ts)
+        # 5) Compute content signature over canonical DM digest
         ts = int(time.time() * 1000)
         content_sig = crypto.sign(
             my_privkey,
             crypto.canonical_dm_content(ciphertext_b64, args.from_id, args.to, ts)
         )
 
-        # Build payload
+        # 6) Build payload + envelope, then sign envelope for transport
         payload = {
             "ciphertext": ciphertext_b64,
             "sender_pub": sender_pub_b64,
             "content_sig": content_sig
         }
 
-        # Build envelope with correct from/to and payload
         env = m.new_envelope(m.DIRECT_MSG, from_id=args.from_id, to_id=args.to)
         env["body"] = {"payload": payload}
-        env["ts"] = ts  # ensure timestamp is included
-
-        # Sign envelope for transport
+        env["ts"] = ts  # tie signature digest to a concrete timestamp
         env = m.sign_envelope(env, my_privkey)
 
-        # Send
         await write_frame(writer, env)
 
     elif args.command == "send-group":
+        # Signed cleartext post to a group (no encryption, just integrity)
         env = m.new_envelope(m.GROUP_MSG, from_id=args.from_id, group=args.group)
         env["body"] = {"content_type": "text/plain", "content": args.message}
+        # Sign content first (adds content_sig), then transport
         env = m.sign_content(env, my_privkey)
         env = m.sign(env, my_privkey)
         await write_frame(writer, env)
 
     elif args.command == "send-file":
+        # Very simple inline file transfer; chunks are hex-encoded for portability.
         p = Path(args.path)
         size = p.stat().st_size
         offer = m.new_envelope(m.FILE_OFFER, from_id=args.from_id, to_id=args.to)
@@ -193,6 +231,7 @@ async def run_cli(args: argparse.Namespace) -> None:
                 if not data:
                     break
                 chunk = m.new_envelope(m.FILE_CHUNK, from_id=args.from_id, to_id=args.to)
+                # NOTE: hex, not Base64; easy to debug and consistent across languages.
                 chunk["body"] = {"file_id": p.name, "offset": sent, "data_b64": data.hex()}
                 chunk = m.sign(chunk, my_privkey)
                 await write_frame(writer, chunk)
@@ -203,14 +242,37 @@ async def run_cli(args: argparse.Namespace) -> None:
         done = m.sign(done, my_privkey)
         await write_frame(writer, done)
 
+    # Clean shutdown of the one-shot CLI connection
     writer.close()
     await writer.wait_closed()
 
+
+# -------------------------
+# Server peer runner
+# -------------------------
+
 async def run_server(server_id: str, introducer: Tuple[str, int], listen: Tuple[str, int]):
+    """Register a server node with the introducer, then serve forever."""
     server = ServerNode(server_id, introducer, listen)
     await server.start()
 
+
+# -------------------------
+# Arg parsing + main entry
+# -------------------------
+
 def parse_args() -> argparse.Namespace:
+    """
+    Parse all modes + subcommands.
+
+    Quick examples:
+      Introducer:   python -m socp.run --mode introducer --host 127.0.0.1 --port 9000
+      Client:       python -m socp.run --mode client --id alice --introducer 127.0.0.1:9000
+      CLI members:  python -m socp.run --mode cli --id alice --introducer 127.0.0.1:9000 members
+      CLI send:     python -m socp.run --mode cli --id alice --introducer 127.0.0.1:9000 \
+                        send --from alice --to bob hello world
+      Server peer:  python -m socp.run --mode server --id s1 --introducer 127.0.0.1:9000 --listen 0.0.0.0:9100
+    """
     p = argparse.ArgumentParser()
     p.add_argument("--mode", choices=["introducer", "client", "cli", "server"], required=True)
     p.add_argument("--host")
@@ -243,11 +305,13 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    """Dispatch into the chosen mode. Keeps top-level nice and small."""
     args = parse_args()
     if args.mode == "introducer":
         host = args.host or "127.0.0.1"
         port = args.port or 9000
         asyncio.run(run_introducer(host, port))
+
     elif args.mode == "client":
         if not args.ident or not args.introducer:
             raise SystemExit("--id and --introducer are required for client mode")
@@ -257,12 +321,15 @@ def main() -> None:
             lh, lp = args.listen.split(":")
             listen = (lh, int(lp))
         asyncio.run(run_client(args.ident, (ih, int(ip)), listen))
+
     elif args.mode == "cli":
         if not args.introducer:
             raise SystemExit("--introducer required for cli mode")
+        # For send/send-group we collect the rest of the args into a single string.
         if args.command in ("send", "send-group"):
             args.message = " ".join(args.message or [])
         asyncio.run(run_cli(args))
+
     elif args.mode == "server":
         if not args.ident or not args.introducer or not args.listen:
             raise SystemExit("--id, --introducer, and --listen are required for server mode")
