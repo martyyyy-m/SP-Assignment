@@ -3,11 +3,6 @@ import json
 import struct
 from typing import Any, Dict, Optional
 
-import asyncio
-import json
-import struct
-from typing import Any, Dict, Optional
-
 """
 framing.py — tiny length-prefixed JSON framing for asyncio streams.
 
