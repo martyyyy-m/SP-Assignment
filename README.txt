@@ -1,5 +1,12 @@
 SOCP Chat Prototype (Python asyncio)
 
+Group Members:
+1. Preseia Reyes (A1852631)
+2. Martin Mohanan (A1933931)
+3. Ami Mevada (A1994216)
+4. Jasjot Singh (A1959543)
+5. Heet Parmeshwar Patel (A1963465)
+
 Overview
 This is a minimal, interoperable-style prototype of the overlay multi-party chat system described in the SOCP brief. It implements:
 - Listing members (presence registry)
