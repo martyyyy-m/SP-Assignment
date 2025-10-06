@@ -159,7 +159,7 @@ class IntroducerServer:
 
             # Track presence locally
             self.presence.update(sender, {
-                "last_seen": frame.get("timestamp_ms"),
+                "last_seen": frame.get("ts"),
                 "status": "online",
                 "addr": str(ctx.writer.get_extra_info("peername")),
             })
@@ -199,7 +199,7 @@ class IntroducerServer:
         if msg_type == m.PRESENCE_UPDATE:
             body = frame.get("body", {})
             self.presence.update(sender or "", {
-                "last_seen": frame.get("timestamp_ms"),
+                "last_seen": frame.get("ts"),
                 "status": body.get("status", "online"),
                 "addr": str(ctx.writer.get_extra_info("peername")),
             })
@@ -325,42 +325,53 @@ class ClientNode:
 
     # receiving a direct message
     async def process_incoming(self, frame: Dict[str, Any]):
-        sender = frame.get("from")
-        sender_pub = self.pubkeys.get(sender)
-        if not sender_pub:
-            return  # drop if unknown sender
-
-        # Verify transport signature on the envelope
-        if not m.verify_envelope(frame, sender_pub):
-            return  # drop invalid transport signature
-
-        body = frame.get("body", {})
-        content_sig = body.get("content_sig")
-        ts = body.get("ts")
         mt = frame.get("msg_type")
+        sender = frame.get("from")
+        to_id = frame.get("to")
+        ts = frame.get("ts")
+        body = frame.get("body", {})
+        payload = body.get("payload", {})
 
         # Direct Message
         if mt == m.DIRECT_MSG:
-            ciphertext = body.get("content")
-            to_id = frame.get("to")
-            if not ciphertext or not to_id or not content_sig or ts is None:
+            ciphertext = payload.get("ciphertext")
+            sender_pub_b64 = payload.get("sender_pub")
+            content_sig = payload.get("content_sig")
+            if not ciphertext or not sender_pub_b64 or not content_sig or ts is None:
                 return  # incomplete frame
+
+            # Import sender's public key from payload
+            try:
+                sender_pub = crypto.import_pubkey_b64url(sender_pub_b64)
+            except Exception:
+                return
 
             # Verify canonical content signature
             canonical = crypto.canonical_dm_content(ciphertext, sender, to_id, ts)
             if not crypto.verify(sender_pub, canonical, content_sig):
-                return  # invalid content signature
+                return  # invalid signature
 
             # Decrypt content
-            plaintext = crypto.rsa_decrypt(self.privkey, ciphertext).decode("utf-8")
-            body["content"] = plaintext
+            try:
+                plaintext = crypto.rsa_decrypt(self.privkey, ciphertext).decode("utf-8")
+            except Exception:
+                return
+
+            # Replace payload with decrypted content for inbox
+            frame["body"]["payload"]["plaintext"] = plaintext
             await self.inbox.put(frame)
+            return
 
         # === Group Message ===
-        elif mt == m.GROUP_MSG:
+        if mt == m.GROUP_MSG:
             content = body.get("content")
+            content_sig = body.get("content_sig")
             if not content or not content_sig or ts is None:
                 return  # incomplete frame
+            
+            sender_pub = self.pubkeys.get(sender)
+            if not sender_pub:
+                return
 
             # Verify canonical group content signature
             canonical = crypto.canonical_group_content(content, sender, ts)
@@ -369,11 +380,11 @@ class ClientNode:
 
             # Keep content as-is (no decryption)
             await self.inbox.put(frame)
+            return
 
         # === Other message types ===
-        else:
-            # For messages like FILE_OFFER, FILE_CHUNK, etc., you could handle here if needed
-            await self.inbox.put(frame)
+        # For messages like FILE_OFFER, FILE_CHUNK, etc., you could handle here if needed
+        await self.inbox.put(frame)
 
     async def send_presence(self, status: str = "online") -> None:
         _, w = self.peers["introducer"]
@@ -399,14 +410,21 @@ class ClientNode:
         ciphertext = crypto.rsa_encrypt(pubkey, plaintext.encode("utf-8"))
 
         ts = now_ms()
-        env = m.new_envelope(m.DIRECT_MSG, from_id=self.node_id, to_id=to_id)
-        env["ts"] = ts
-        env["body"]["content"] = ciphertext
-        env["body"]["ts"] = ts
-
         # Canonical DM content signature
         canonical = crypto.canonical_dm_content(ciphertext, self.node_id, to_id, ts)
-        env["body"]["content_sig"] = crypto.sign(self.privkey, canonical)
+        content_sig = crypto.sign(self.privkey, canonical)
+
+        # Build payload
+        payload = {
+            "ciphertext": ciphertext,
+            "sender_pub": crypto.export_pubkey_b64url(self.pubkey),
+            "content_sig": content_sig
+        }
+
+        # Build envelope
+        env = m.new_envelope(m.DIRECT_MSG, from_id=self.node_id, to_id=to_id)
+        env["ts"] = ts
+        env["body"]["payload"] = payload
 
         # Transport signature
         env = m.sign(env, self.privkey)
@@ -498,4 +516,3 @@ class ServerNode:
                 await self.inbox.put(frame)
         except Exception:
             pass
-        
