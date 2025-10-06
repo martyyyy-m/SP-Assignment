@@ -20,9 +20,7 @@ Security Model (Prototype)
 - Authentication: none by default; messages carry claimed identities. This is sufficient for interop prototyping and lab use. In a production-leaning build, wrap connections in TLS and add signed tokens.
 - Basic replay/loop defenses: message ID cache for most types, TTL decrement on forward.
 
-Intentional Vulnerabilities
-1) Presence replay gap (intentional): PRESENCE_UPDATE messages are not checked against the message ID replay cache. A forged PRESENCE_UPDATE can spoof a user’s status.
-2) Hidden operator override (intentional): If environment variable SOCP_OPERATOR_CODE is set, the node accepts ADMIN_OP messages carrying a matching operator_code. These messages allow setting the `from` identity of subsequent relayed DIRECT_MSG/GROUP_MSG on this connection. This is confined to the application session and does not access the host OS.
+We have implemented two Intentional Vulnerabilities (Backdoors) in this project
 
 Ethical Scope
 - No filesystem or OS access outside this application. Exploits only affect the running node’s behavior (presence and message attribution).
@@ -46,24 +44,27 @@ Quick Start
   # Terminal 1
   python3 -m socp.run_node --mode server --id server_1 --introducer 127.0.0.1:9000 --listen 127.0.0.1:9201
 
-5) Start two client nodes and connect them to the introducer (use two new terminals)
+6) Start two client nodes and connect them to the introducer (use two new terminals)
    # Terminal 2
    python3 -m socp.run_node --mode client --id alice --introducer 127.0.0.1:9000 --listen 127.0.0.1:9101
 
    # Terminal 3
    python3 -m socp.run_node --mode client --id bob --introducer 127.0.0.1:9000 --listen 127.0.0.1:9102
 
-6) Verify: list members (can be done from any extra terminal)
+7) Verify: list members (can be done from any extra terminal)
    python3 -m socp.run_node --mode cli --introducer 127.0.0.1:9000 members
 
-7) Send a direct message
+8) Send a direct message
    python3 -m socp.run_node --mode cli --introducer 127.0.0.1:9000 send --from alice --to bob "Hello Bob"
 
-8) Send a group message (group is a free-form label)
+9) Send a group message (group is a free-form label)
    python3 -m socp.run_node --mode cli --introducer 127.0.0.1:9000 send-group --from alice --group cohort "Hello everyone"
 
-9) File transfer (inline chunks over introducer)
+10) File transfer (inline chunks over introducer)
    python -m socp.run_node --mode cli --introducer 127.0.0.1:9000 send-file --from alice --to bob --path README.txt
+
+11) Removing a member
+   python3 -m socp.run_node --mode cli --id server_1 --introducer 127.0.0.1:9000 remove-user --server server_1 --user alice
 
 
 CLI Usage
