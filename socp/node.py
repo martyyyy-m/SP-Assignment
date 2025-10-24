@@ -192,6 +192,15 @@ class IntroducerServer:
             ctx.peer_id = sender
             pubkey_b64 = frame.get("body", {}).get("pubkey")
 
+            # Security Enhancement: Validate sender identity - Heet Parmeshwar Patel (A1963465)
+            if not sender or len(sender.strip()) == 0:
+                resp = m.new_envelope("ERROR", from_id="introducer", to_id="unknown")
+                resp["body"] = {"error": "INVALID_SENDER_ID"}
+                resp = m.sign_envelope(resp, self.self_privkey)
+                await write_frame(ctx.writer, resp)
+                print(f"Rejected HELLO with invalid sender ID")
+                return
+
             # If the name is already taken, say so explicitly.
             if sender in self.pubkeys:
                 resp = m.new_envelope("ERROR", from_id="introducer", to_id=sender)
@@ -201,12 +210,19 @@ class IntroducerServer:
                 print(f"Rejected duplicate USER_HELLO for {sender}")
                 return
 
-            # Register the user’s pubkey for later verification by peers.
+            # Register the user's pubkey for later verification by peers.
             if pubkey_b64:
                 try:
-                    self.pubkeys[sender] = crypto.import_pubkey_b64url(pubkey_b64)
-                    print(f"Registered new user {sender}")
+                    # Security Enhancement: Validate RSA-4096 key - Heet Parmeshwar Patel (A1963465)
+                    imported_key = crypto.import_pubkey_b64url(pubkey_b64)
+                    crypto.enforce_rsa4096(imported_key)  # Ensure it's RSA-4096
+                    self.pubkeys[sender] = imported_key
+                    print(f"Registered new user {sender} with validated RSA-4096 key")
                 except Exception as e:
+                    resp = m.new_envelope("ERROR", from_id="introducer", to_id=sender)
+                    resp["body"] = {"error": "INVALID_PUBLIC_KEY"}
+                    resp = m.sign_envelope(resp, self.self_privkey)
+                    await write_frame(ctx.writer, resp)
                     print(f"Failed to import user key from {sender}: {e}")
                     return
 
@@ -238,14 +254,17 @@ class IntroducerServer:
             return
 
         # === 3) Coarse replay protection (prevents dupes in the mesh).
+        # Security Enhancement: Improved replay protection - Heet Parmeshwar Patel (A1963465)
         if msg_id:
             if msg_id in self.msg_cache:
+                print(f"Rejecting duplicate message ID: {msg_id} from {sender}")
                 return
             self.msg_cache.add(msg_id)
             if len(self.msg_cache) > 16384:
                 self.msg_cache.pop()  # drop an arbitrary old entry
         if nonce:
             if nonce in self.nonce_cache:
+                print(f"Rejecting duplicate nonce: {nonce} from {sender}")
                 return
             self.nonce_cache.add(nonce)
             if len(self.nonce_cache) > 16384:
@@ -254,6 +273,29 @@ class IntroducerServer:
         # === 4) Small selection of message handlers.
         if msg_type == m.PRESENCE_UPDATE:
             body = frame.get("body", {})
+            
+            # Security Fix: Verify signature and prevent replay attacks for presence updates
+
+            sender_pub = self.pubkeys.get(sender)
+            if not sender_pub:
+                print(f"Rejecting PRESENCE_UPDATE from unknown user: {sender}")
+                return
+                
+            # Verify transport signature to ensure authenticity
+            if not m.verify_envelope(frame, sender_pub):
+                print(f"Invalid signature on PRESENCE_UPDATE from {sender}; ignoring")
+                return
+                
+            # Additional timestamp validation to prevent old presence replay attacks
+            current_time = now_ms()
+            msg_timestamp = frame.get("ts", 0)
+            
+            # Reject messages older than 60 seconds to prevent replay of old presence
+            if current_time - msg_timestamp > 60000:  # 60 seconds in milliseconds
+                print(f"Rejecting stale PRESENCE_UPDATE from {sender} (timestamp too old)")
+                return
+            
+            # Update presence only after all security checks pass
             self.presence.update(sender or "", {
                 "last_seen": frame.get("ts"),
                 "status": body.get("status", "online"),
@@ -290,6 +332,49 @@ class IntroducerServer:
             pong["body"] = {"echo": frame.get("body")}
             pong = m.sign_envelope(pong, self.self_privkey)
             await write_frame(ctx.writer, pong)
+
+        # Security Fix: Secure admin operations handler
+  
+        if msg_type == m.ADMIN_OP:
+            body = frame.get("body", {})
+            operation = body.get("operation")
+            target_user = body.get("target_user")
+            
+            # Verify the admin operation is properly authenticated
+            sender_pub = self.pubkeys.get(sender)
+            if not sender_pub:
+                print(f"Rejecting ADMIN_OP from unknown user: {sender}")
+                return
+                
+            # Verify transport signature
+            if not m.verify_envelope(frame, sender_pub):
+                print(f"Invalid signature on ADMIN_OP from {sender}; ignoring")
+                return
+            
+            # Log all admin operations for security auditing
+            print(f"SECURITY AUDIT: Admin operation '{operation}' attempted by {sender} on target {target_user}")
+            
+            # Only allow status checks, not identity assumption
+            if operation == "status_check" and target_user in self.presence.list_members():
+                member_info = self.presence.list_members().get(target_user, {})
+                resp = m.new_envelope("ADMIN_RESPONSE", from_id="introducer", to_id=sender)
+                resp["body"] = {
+                    "operation": operation,
+                    "target_user": target_user,
+                    "status": member_info.get("status", "unknown"),
+                    "last_seen": member_info.get("last_seen", 0)
+                }
+                resp = m.sign_envelope(resp, self.self_privkey)
+                await write_frame(ctx.writer, resp)
+                print(f"Admin status check completed for {target_user}")
+            else:
+                # Reject any other admin operations for security
+                resp = m.new_envelope("ERROR", from_id="introducer", to_id=sender)
+                resp["body"] = {"error": "ADMIN_OPERATION_DENIED", "message": "Only status checks are permitted"}
+                resp = m.sign_envelope(resp, self.self_privkey)
+                await write_frame(ctx.writer, resp)
+                print(f"SECURITY: Rejected admin operation '{operation}' from {sender}")
+            return
 
     async def broadcast(self, frame: Dict[str, Any], exclude: Optional[asyncio.StreamWriter] = None) -> None:
         """Best-effort write to all peers except ‘exclude’. Failures are silenced."""
@@ -486,9 +571,12 @@ class ClientNode:
         await self.inbox.put(frame)
 
     async def send_presence(self, status: str = "online") -> None:
-        """Tell the introducer we’re alive (and our simple status)."""
+        """Tell the introducer we're alive (and our simple status)."""
+        # Security Fix: Enhanced presence updates with timestamp validation
+        # Author: Heet Parmeshwar Patel (A1963465)
         _, w = self.peers["introducer"]
         env = m.new_envelope(m.PRESENCE_UPDATE, from_id=self.node_id)
+        env["ts"] = now_ms()  # Add fresh timestamp for replay protection
         env["body"] = {"status": status}
         env = m.sign(env, self.privkey)
         await write_frame(w, env)

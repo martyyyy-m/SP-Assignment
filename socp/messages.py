@@ -85,6 +85,8 @@ FILE_CHUNK = "FILE_CHUNK"
 FILE_COMPLETE = "FILE_COMPLETE"
 PING = "PING"
 PONG = "PONG"
+ADMIN_OP = "ADMIN_OP"  # Security Fix: Secure admin operations with proper authentication
+ADMIN_RESPONSE = "ADMIN_RESPONSE"  # Security Fix: Admin operation responses
 
 
 def canonical_bytes(env: Dict[str, Any]) -> bytes:

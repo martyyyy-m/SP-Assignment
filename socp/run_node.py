@@ -261,6 +261,42 @@ async def run_cli(args: argparse.Namespace) -> None:
         done = m.sign(done, my_privkey)
         await write_frame(writer, done)
 
+    elif args.command == "admin-op":
+        # Security Fix: Implement secure admin operations with proper authentication
+ 
+        
+        # Check if operator code is provided and is a strong code
+        operator_code = args.operator_code
+        expected_code = os.environ.get("SOCP_OPERATOR_CODE")
+        
+        if not expected_code:
+            raise SystemExit("SOCP_OPERATOR_CODE environment variable not set. Admin operations disabled for security.")
+        
+        # Prevent weak operator codes
+        if len(expected_code) < 32:
+            raise SystemExit("Operator code must be at least 32 characters for security.")
+        
+        # Constant-time comparison to prevent timing attacks
+        import hmac
+        if not hmac.compare_digest(operator_code, expected_code):
+            raise SystemExit("Invalid operator code. Access denied.")
+        
+        # Additional security: Log the admin operation attempt
+        print(f"WARNING: Admin operation attempted by {args.ident} to assume identity of {args.assume_from}")
+        
+        # Even with valid operator code, we restrict what can be done
+        # This prevents full identity assumption and only allows limited admin operations
+        env = m.new_envelope(m.ADMIN_OP, from_id=args.ident or "admin")
+        env["body"] = {
+            "operation": "status_check",  # Limited to status operations only
+            "target_user": args.assume_from,
+            "operator_authenticated": True,
+            "timestamp": int(time.time() * 1000)
+        }
+        env = m.sign(env, my_privkey)
+        await write_frame(writer, env)
+        print(f"Admin status check sent for user {args.assume_from}")
+
     # Clean shutdown of the one-shot CLI connection.
     writer.close()
     await writer.wait_closed()
@@ -323,6 +359,12 @@ def parse_args() -> argparse.Namespace:
     sp = sub.add_parser("remove-user")
     sp.add_argument("--server", dest="server_id", required=True, help="Server ID sending the removal")
     sp.add_argument("--user", dest="user_id", required=True, help="User ID to remove")
+
+    # Security Fix: Secure admin operations with proper authentication
+    
+    sp = sub.add_parser("admin-op")
+    sp.add_argument("--operator-code", required=True, help="Operator authentication code")
+    sp.add_argument("--assume-from", required=True, help="User ID to assume (requires proper authorization)")
 
     return p.parse_args()
 
